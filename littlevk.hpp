@@ -9,6 +9,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <queue>
 #include <regex>
 #include <set>
 #include <variant>
@@ -80,6 +81,44 @@ inline detail::Config *config()
 	static detail::Config config;
 	return &config;
 }
+
+// Automatic deallocation system
+struct Deallocator {
+	vk::Device device;
+	std::queue <std::function <void (vk::Device)>> device_deallocators;
+
+	Deallocator(vk::Device device) : device(device) {}
+	~Deallocator() {
+		while (!device_deallocators.empty()) {
+			device_deallocators.front()(device);
+			device_deallocators.pop();
+		}
+	}
+};
+
+// Return proxy for device objects
+template <typename T, void deleter(const vk::Device &, const T &)>
+struct DeviceReturnProxy {
+	T value;
+	bool failed;
+
+	DeviceReturnProxy(T value) : value(value), failed(false) {}
+	DeviceReturnProxy(bool failed) : failed(failed) {}
+
+	T unwrap(Deallocator *deallocator) {
+		if (this->failed)
+			return {};
+
+		T value = this->value;
+		deallocator->device_deallocators.push(
+			[value](vk::Device device) {
+				deleter(device, value);
+			}
+		);
+
+		return this->value;
+	}
+};
 
 namespace log {
 
@@ -166,43 +205,6 @@ static bool check_validation_layer_support(const std::vector <const char *> &val
 	}
 
 	return true;
-}
-
-static VkResult make_debug_messenger(const VkInstance &instance,
-		const VkDebugUtilsMessengerCreateInfoEXT *create_info,
-		const VkAllocationCallbacks *allocator,
-		VkDebugUtilsMessengerEXT *debug_messenger)
-{
-	auto func = (PFN_vkCreateDebugUtilsMessengerEXT)
-		vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
-	printf("func: %p\n", func);
-
-	if (func != nullptr) {
-		return func(instance,
-			create_info,
-			allocator,
-			debug_messenger
-		);
-	}
-
-	throw std::runtime_error("failed to set up debug messenger");
-
-	return VK_ERROR_EXTENSION_NOT_PRESENT;
-}
-
-static void destroy_debug_messenger(const VkInstance &instance,
-		const VkDebugUtilsMessengerEXT &debug_messenger,
-		const VkAllocationCallbacks *allocator)
-{
-	auto func = (PFN_vkDestroyDebugUtilsMessengerEXT)
-		vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
-
-	if (func != nullptr) {
-		func(instance,
-			debug_messenger,
-			allocator
-		);
-	}
 }
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_logger
@@ -646,6 +648,21 @@ inline void destroy_swapchain(const vk::Device &device, Swapchain &swapchain)
 	device.destroySwapchainKHR(swapchain.swapchain);
 }
 
+// Return proxy for framebuffer(s)
+static void framebuffer_delete(const vk::Device &device, const vk::Framebuffer &framebuffer)
+{
+	device.destroyFramebuffer(framebuffer);
+}
+
+static void framebuffer_set_delete(const vk::Device &device, const std::vector <vk::Framebuffer> &framebuffers)
+{
+	for (const vk::Framebuffer &fb : framebuffers)
+		device.destroyFramebuffer(fb);
+}
+
+using FramebufferReturnProxy = DeviceReturnProxy <vk::Framebuffer, framebuffer_delete>;
+using FramebufferSetReturnProxy = DeviceReturnProxy <std::vector <vk::Framebuffer>, framebuffer_set_delete>;
+
 // Generate framebuffer from swapchain, render pass and optional depth buffer
 struct FramebufferSetInfo {
 	Swapchain *swapchain;
@@ -655,7 +672,7 @@ struct FramebufferSetInfo {
 	// vk::ImageView *depth_buffer_view = nullptr;
 };
 
-inline std::vector <vk::Framebuffer> make_framebuffers(const vk::Device &device, const FramebufferSetInfo &info)
+inline FramebufferSetReturnProxy framebuffers(const vk::Device &device, const FramebufferSetInfo &info)
 {
 	std::vector <vk::Framebuffer> framebuffers;
 
@@ -679,7 +696,22 @@ struct PresentSyncronization {
         std::vector <vk::Fence> in_flight;
 };
 
-inline PresentSyncronization make_present_syncronization(const vk::Device &device, uint32_t frames_in_flight)
+inline void destroy_present_syncronization(const vk::Device &device, const PresentSyncronization &sync)
+{
+	for (const vk::Semaphore &semaphore : sync.image_available)
+		device.destroySemaphore(semaphore);
+
+	for (const vk::Semaphore &semaphore : sync.render_finished)
+		device.destroySemaphore(semaphore);
+
+	for (const vk::Fence &fence : sync.in_flight)
+		device.destroyFence(fence);
+}
+
+// Return proxy for present syncronization
+using PresentSyncronizationReturnProxy = DeviceReturnProxy <PresentSyncronization, destroy_present_syncronization>;
+
+inline PresentSyncronizationReturnProxy make_present_syncronization(const vk::Device &device, uint32_t frames_in_flight)
 {
 	PresentSyncronization sync;
 
@@ -697,18 +729,6 @@ inline PresentSyncronization make_present_syncronization(const vk::Device &devic
 	}
 
 	return sync;
-}
-
-inline void destroy_present_syncronization(const vk::Device &device, const PresentSyncronization &sync)
-{
-	for (const vk::Semaphore &semaphore : sync.image_available)
-		device.destroySemaphore(semaphore);
-
-	for (const vk::Semaphore &semaphore : sync.render_finished)
-		device.destroySemaphore(semaphore);
-
-	for (const vk::Fence &fence : sync.in_flight)
-		device.destroyFence(fence);
 }
 
 struct SurfaceOperation {
@@ -900,6 +920,15 @@ struct Buffer {
         vk::MemoryRequirements requirements;
 };
 
+// Return proxy for buffers
+static void buffer_delete(const vk::Device &device, const Buffer &buffer)
+{
+	device.destroyBuffer(buffer.buffer);
+	device.freeMemory(buffer.memory);
+}
+
+using BufferReturnProxy = DeviceReturnProxy <Buffer, buffer_delete>;
+
 // Find memory type
 inline uint32_t find_memory_type(const vk::PhysicalDeviceMemoryProperties &mem_props,
 		uint32_t type_filter,
@@ -923,8 +952,7 @@ inline uint32_t find_memory_type(const vk::PhysicalDeviceMemoryProperties &mem_p
 	return type_index;
 }
 
-// TODO: move to source file
-inline Buffer make_buffer(const vk::Device &device, size_t size, const vk::PhysicalDeviceMemoryProperties &properties)
+inline BufferReturnProxy buffer(const vk::Device &device, size_t size, const vk::PhysicalDeviceMemoryProperties &properties)
 {
 	// TODO: usage flags as well...
         Buffer buffer;
@@ -1192,6 +1220,55 @@ inline void destroy_image(const vk::Device &device, const Image &image)
         device.freeMemory(image.memory);
 }
 
+// Companion functions with automatic memory management
+static void command_pool_delete(const vk::Device &device, const vk::CommandPool &pool)
+{
+	device.destroyCommandPool(pool);
+}
+
+using CommandPoolReturnProxy = DeviceReturnProxy <vk::CommandPool, command_pool_delete>;
+
+inline CommandPoolReturnProxy command_pool(const vk::Device &device, const vk::CommandPoolCreateInfo &info)
+{
+	vk::CommandPool pool;
+	if (device.createCommandPool(&info, nullptr, &pool) != vk::Result::eSuccess)
+		return  true;
+
+	return std::move(pool);
+}
+
+static void pipeline_layout_delete(const vk::Device &device, const vk::PipelineLayout &layout)
+{
+	device.destroyPipelineLayout(layout);
+}
+
+using PipelineLayoutReturnProxy = DeviceReturnProxy <vk::PipelineLayout, pipeline_layout_delete>;
+
+inline PipelineLayoutReturnProxy pipeline_layout(const vk::Device &device, const vk::PipelineLayoutCreateInfo &info)
+{
+	vk::PipelineLayout layout;
+	if (device.createPipelineLayout(&info, nullptr, &layout) != vk::Result::eSuccess)
+		return  true;
+
+	return std::move(layout);
+}
+
+static void render_pass_delete(const vk::Device &device, const vk::RenderPass &render_pass)
+{
+	device.destroyRenderPass(render_pass);
+}
+
+using RenderPassReturnProxy = DeviceReturnProxy <vk::RenderPass, render_pass_delete>;
+
+inline RenderPassReturnProxy render_pass(const vk::Device &device, const vk::RenderPassCreateInfo &info)
+{
+	vk::RenderPass render_pass;
+	if (device.createRenderPass(&info, nullptr, &render_pass) != vk::Result::eSuccess)
+		return  true;
+
+	return std::move(render_pass);
+}
+
 namespace shader {
 
 // TODO: detail here as well...
@@ -1405,8 +1482,16 @@ inline std::string fmt_lines(const std::string &str)
 	return out;
 }
 
+// Return proxy specialization for shader modules
+static void shader_delete(const vk::Device &device, const vk::ShaderModule &shader)
+{
+	device.destroyShaderModule(shader);
+}
+
+using ShaderModuleReturnProxy = DeviceReturnProxy <vk::ShaderModule, shader_delete>;
+
 // Compile shader
-inline std::optional <vk::ShaderModule> compile(const vk::Device &device,
+inline ShaderModuleReturnProxy compile(const vk::Device &device,
 		const std::string &source,
 		const vk::ShaderStageFlagBits &shader_type,
 		const Defines &defines = {},
@@ -1422,7 +1507,7 @@ inline std::optional <vk::ShaderModule> compile(const vk::Device &device,
 		std::cerr << "Shader compilation failed:\n" << out.log
 			<< "\nSource:\n" << fmt_lines(out.source) << "\n";
 
-		return std::nullopt;
+		return true;
 	}
 
         vk::ShaderModuleCreateInfo create_info(
@@ -1434,7 +1519,7 @@ inline std::optional <vk::ShaderModule> compile(const vk::Device &device,
         return device.createShaderModule(create_info);
 }
 
-inline std::optional <vk::ShaderModule> compile(const vk::Device &device,
+inline ShaderModuleReturnProxy compile(const vk::Device &device,
 		const std::filesystem::path &path,
 		const vk::ShaderStageFlagBits &shader_type,
 		const Defines &defines = {},
@@ -1451,7 +1536,7 @@ inline std::optional <vk::ShaderModule> compile(const vk::Device &device,
 		std::cerr << "Shader compilation failed:\n" << out.log
 			<< "\nSource:\n" << fmt_lines(out.source) << "\n";
 
-		return std::nullopt;
+		return true;
 	}
 
         vk::ShaderModuleCreateInfo create_info(
@@ -1467,6 +1552,13 @@ inline std::optional <vk::ShaderModule> compile(const vk::Device &device,
 
 namespace pipeline {
 
+static void pipeline_delete(const vk::Device &device, const vk::Pipeline &pipeline)
+{
+	device.destroyPipeline(pipeline);
+}
+
+using PipelineReturnProxy = DeviceReturnProxy <vk::Pipeline, pipeline_delete>;
+
 struct GraphicsCreateInfo {
 	vk::VertexInputBindingDescription vertex_binding;
 	vk::ArrayProxy <vk::VertexInputAttributeDescription> vertex_attributes;
@@ -1481,7 +1573,7 @@ struct GraphicsCreateInfo {
 	vk::RenderPass render_pass;
 };
 
-inline std::optional <vk::Pipeline> create(const vk::Device &device, const GraphicsCreateInfo &info)
+inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreateInfo &info)
 {
 	vk::PipelineShaderStageCreateInfo shader_stages[] = {
 		vk::PipelineShaderStageCreateInfo {

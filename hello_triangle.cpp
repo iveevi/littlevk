@@ -28,9 +28,6 @@ void main() {
 
 int main()
 {
-	// Configuration options
-	littlevk::config()->abort_on_validation_error = true;
-
 	// Load Vulkan physical device
 	auto predicate = [](const vk::PhysicalDevice &dev) {
 		return littlevk::physical_device_able(dev,  {
@@ -38,11 +35,12 @@ int main()
 		});
 	};
 
-        // TODO: pick_first predicate...
 	vk::PhysicalDevice phdev = littlevk::pick_physical_device(predicate);
 
 	littlevk::ApplicationSkeleton *app = new littlevk::ApplicationSkeleton;
         make_application(app, phdev, { 800, 600 }, "Hello Triangle");
+
+	auto deallocator = new littlevk::Deallocator { app->device };
 
 	// Create a dummy render pass
 	std::array <vk::AttachmentDescription, 1> attachments {
@@ -72,11 +70,12 @@ int main()
 		{}, nullptr
 	};
 
-	auto render_pass = app->device.createRenderPass(
+	vk::RenderPass render_pass = littlevk::render_pass(
+		app->device,
 		vk::RenderPassCreateInfo {
-				{}, attachments, subpass
+			{}, attachments, subpass
 		}
-	);
+	).unwrap(deallocator);
 
 	// Create a dummy framebuffer
 	littlevk::FramebufferSetInfo fb_info;
@@ -84,15 +83,15 @@ int main()
 	fb_info.render_pass = render_pass;
 	fb_info.extent = app->window->extent;
 
-	auto framebuffers = littlevk::make_framebuffers(app->device, fb_info);
+	auto framebuffers = littlevk::framebuffers(app->device, fb_info).unwrap(deallocator);
 
 	// Allocate command buffers
-	auto command_pool = app->device.createCommandPool(
+	vk::CommandPool command_pool = littlevk::command_pool(app->device,
 		vk::CommandPoolCreateInfo {
 			vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
 			littlevk::find_graphics_queue_family(phdev)
 		}
-	);
+	).unwrap(deallocator);
 
 	vk::CommandBufferAllocateInfo alloc_info {
 		command_pool, vk::CommandBufferLevel::ePrimary, 2
@@ -132,20 +131,26 @@ int main()
 
 	vk::PhysicalDeviceMemoryProperties mem_props = phdev.getMemoryProperties();
 
-	littlevk::Buffer vertex_buffer = littlevk::make_buffer(app->device, sizeof(triangle), mem_props);
+	littlevk::Buffer vertex_buffer = littlevk::buffer(app->device, sizeof(triangle), mem_props).unwrap(deallocator);
 	littlevk::upload(app->device, vertex_buffer, triangle);
 
 	// Compile shader modules
-	vk::ShaderModule vertex_module = *littlevk::shader::compile(app->device, vertex_shader_source, vk::ShaderStageFlagBits::eVertex);
-	vk::ShaderModule fragment_module = *littlevk::shader::compile(app->device, fragment_shader_source, vk::ShaderStageFlagBits::eFragment);
+	vk::ShaderModule vertex_module = littlevk::shader::compile(
+		app->device, vertex_shader_source,
+		vk::ShaderStageFlagBits::eVertex
+	).unwrap(deallocator);
+
+	vk::ShaderModule fragment_module = littlevk::shader::compile(
+		app->device, fragment_shader_source,
+		vk::ShaderStageFlagBits::eFragment
+	).unwrap(deallocator);
 
 	// Create a graphics pipeline
 	vk::PipelineLayoutCreateInfo pipeline_layout_info {
 		{}, 0, nullptr, 0, nullptr
 	};
 
-	// vk::raii::PipelineLayout pipeline_layout { app->device, pipeline_layout_info };
-	auto pipeline_layout = app->device.createPipelineLayout(pipeline_layout_info);
+	vk::PipelineLayout pipeline_layout = littlevk::pipeline_layout(app->device, pipeline_layout_info).unwrap(deallocator);
 
 	littlevk::pipeline::GraphicsCreateInfo pipeline_info;
 	pipeline_info.vertex_binding = Vertex::binding();
@@ -156,12 +161,11 @@ int main()
 	pipeline_info.pipeline_layout = pipeline_layout;
 	pipeline_info.render_pass = render_pass;
 
-	vk::Pipeline pipeline = *littlevk::pipeline::create(app->device, pipeline_info);
+	vk::Pipeline pipeline = littlevk::pipeline::compile(app->device, pipeline_info).unwrap(deallocator);
 
 	// Syncronization primitives
-	auto sync = littlevk::make_present_syncronization(app->device, 2);
+	auto sync = littlevk::make_present_syncronization(app->device, 2).unwrap(deallocator);
 
-	// TODO: simple hello triangle...
         uint32_t frame = 0;
         while (true) {
                 glfwPollEvents();
@@ -212,28 +216,8 @@ int main()
 	// Finish all pending operations
 	app->device.waitIdle();
 
-	// Free resources
-	app->device.freeCommandBuffers(command_pool, command_buffers);
-	app->device.destroyCommandPool(command_pool);
-
-	littlevk::destroy_buffer(app->device, vertex_buffer);
-
-	app->device.destroyShaderModule(vertex_module);
-	app->device.destroyShaderModule(fragment_module);
-
-	app->device.destroyPipelineLayout(pipeline_layout);
-	app->device.destroyPipeline(pipeline);
-
-	for (auto framebuffer : framebuffers)
-		app->device.destroyFramebuffer(framebuffer);
-
-	app->device.destroyRenderPass(render_pass);
-
-	littlevk::destroy_present_syncronization(app->device, sync);
-
-	// TODO: automatic destruction queue? record allocated objects and destroy them at the end with a single call?
-	// or, every allocation method returns a structure with a unwrap(deallocator) method that automatically does this?
-	// also use an optional-like structure...
+	// Free resources using automatic deallocator
+	delete deallocator;
 
         // Delete application
 	littlevk::destroy_application(app);
