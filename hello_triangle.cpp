@@ -28,23 +28,21 @@ void main() {
 
 int main()
 {
+	// Configuration options
+	littlevk::config()->abort_on_validation_error = true;
+
 	// Load Vulkan physical device
 	auto predicate = [](const vk::raii::PhysicalDevice &dev) {
 		return littlevk::physical_device_able(dev,  {
 			VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-			VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
-			VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
-			VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME,
 		});
 	};
 
-        // TODO: kobra::pick_first predicate...
+        // TODO: pick_first predicate...
 	vk::raii::PhysicalDevice phdev = littlevk::pick_physical_device(predicate);
 
 	littlevk::ApplicationSkeleton *app = new littlevk::ApplicationSkeleton;
         make_application(app, phdev, { 800, 600 }, "Hello Triangle");
-
-	littlevk::PresentSyncronization sync(app->device, 2);
 
 	// Create a dummy render pass
 	std::array <vk::AttachmentDescription, 1> attachments {
@@ -74,38 +72,33 @@ int main()
 		{}, nullptr
 	};
 
-	vk::raii::RenderPass render_pass {
-		app->device,
+	auto render_pass = (*app->device).createRenderPass(
 		vk::RenderPassCreateInfo {
-			{}, attachments, subpass
+				{}, attachments, subpass
 		}
-	};
+	);
 
 	// Create a dummy framebuffer
-	std::vector <vk::raii::Framebuffer> framebuffers;
+	littlevk::FramebufferSetInfo fb_info;
+	fb_info.swapchain = &app->swapchain;
+	fb_info.render_pass = render_pass;
+	fb_info.extent = app->window->extent;
 
-	for (vk::raii::ImageView &view : app->swapchain.image_views) {
-		vk::ImageView views[] = { *view };
-
-		vk::FramebufferCreateInfo fb_info {
-			{}, *render_pass,
-			1, views,
-			app->window->extent.width, app->window->extent.height, 1
-		};
-
-		framebuffers.emplace_back(app->device, fb_info);
-	}
+	auto framebuffers = littlevk::make_framebuffers(*app->device, fb_info);
 
 	// Allocate command buffers
-	vk::raii::CommandPool command_pool {
-		app->device, {
+	auto command_pool = (*app->device).createCommandPool(
+		vk::CommandPoolCreateInfo {
 			vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
 			littlevk::find_graphics_queue_family(phdev)
 		}
+	);
+
+	vk::CommandBufferAllocateInfo alloc_info {
+		command_pool, vk::CommandBufferLevel::ePrimary, 2
 	};
 
-	vk::CommandBufferAllocateInfo alloc_info { *command_pool, vk::CommandBufferLevel::ePrimary, 2 };
-	std::vector <vk::raii::CommandBuffer> command_buffers = app->device.allocateCommandBuffers(alloc_info);
+	auto command_buffers = (*app->device).allocateCommandBuffers(alloc_info);
 
 	// Allocate triangle vertex buffer
 	struct Vertex {
@@ -113,7 +106,7 @@ int main()
 		float color[3];
 
 		// Bindings and attributes
-		static constexpr vk::VertexInputBindingDescription bindings() {
+		static constexpr vk::VertexInputBindingDescription binding() {
 			return {
 				0, sizeof(Vertex), vk::VertexInputRate::eVertex
 			};
@@ -140,95 +133,33 @@ int main()
 	vk::PhysicalDeviceMemoryProperties mem_props = phdev.getMemoryProperties();
 
 	littlevk::Buffer vertex_buffer = littlevk::make_buffer(*app->device, sizeof(triangle), mem_props);
-	upload(*app->device, vertex_buffer, triangle);
+	littlevk::upload(*app->device, vertex_buffer, triangle);
 
 	// Compile shader modules
-	littlevk::ShaderProgram vertex_shader { vertex_shader_source, vk::ShaderStageFlagBits::eVertex };
-	littlevk::ShaderProgram fragment_shader { fragment_shader_source, vk::ShaderStageFlagBits::eFragment };
-
-	vk::ShaderModule vertex_module = *vertex_shader.compile(*app->device);
-	vk::ShaderModule fragment_module = *fragment_shader.compile(*app->device);
+	vk::ShaderModule vertex_module = *littlevk::shader::compile(*app->device, vertex_shader_source, vk::ShaderStageFlagBits::eVertex);
+	vk::ShaderModule fragment_module = *littlevk::shader::compile(*app->device, fragment_shader_source, vk::ShaderStageFlagBits::eFragment);
 
 	// Create a graphics pipeline
-	vk::PipelineShaderStageCreateInfo shader_stages[] = {
-		vk::PipelineShaderStageCreateInfo {
-			{}, vk::ShaderStageFlagBits::eVertex, vertex_module, "main"
-		},
-		vk::PipelineShaderStageCreateInfo {
-			{}, vk::ShaderStageFlagBits::eFragment, fragment_module, "main"
-		}
-	};
-
-	auto vertex_binding = Vertex::bindings();
-	auto vertex_attributes = Vertex::attributes();
-
-	vk::PipelineVertexInputStateCreateInfo vertex_input_info {
-		{}, vertex_binding, vertex_attributes
-	};
-
-	vk::PipelineInputAssemblyStateCreateInfo input_assembly {
-		{}, vk::PrimitiveTopology::eTriangleList
-	};
-
-	// TODO: dynamic state options
-	vk::Viewport viewport {
-		0.0f, 0.0f,
-		(float) app->window->extent.width, (float) app->window->extent.height,
-		0.0f, 1.0f
-	};
-
-	vk::Rect2D scissor {
-		{}, app->window->extent
-	};
-
-	vk::PipelineViewportStateCreateInfo viewport_state {
-		{}, 1, &viewport, 1, &scissor
-	};
-
-	vk::PipelineRasterizationStateCreateInfo rasterizer {
-		{}, false, false,
-		vk::PolygonMode::eFill,
-		vk::CullModeFlagBits::eBack,
-		vk::FrontFace::eClockwise,
-		false, 0.0f, 0.0f, 0.0f, 1.0f
-	};
-
-	vk::PipelineMultisampleStateCreateInfo multisampling {
-		{}, vk::SampleCountFlagBits::e1
-	};
-
-	vk::PipelineColorBlendAttachmentState color_blend_attachment {
-		false,
-		vk::BlendFactor::eOne, vk::BlendFactor::eZero, vk::BlendOp::eAdd,
-		vk::BlendFactor::eOne, vk::BlendFactor::eZero, vk::BlendOp::eAdd,
-		vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-		vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA
-	};
-
-	vk::PipelineColorBlendStateCreateInfo color_blending {
-		{}, false, vk::LogicOp::eCopy,
-		1, &color_blend_attachment,
-		{ 0.0f, 0.0f, 0.0f, 0.0f }
-	};
-
 	vk::PipelineLayoutCreateInfo pipeline_layout_info {
 		{}, 0, nullptr, 0, nullptr
 	};
 
-	vk::raii::PipelineLayout pipeline_layout { app->device, pipeline_layout_info };
+	// vk::raii::PipelineLayout pipeline_layout { app->device, pipeline_layout_info };
+	auto pipeline_layout = (*app->device).createPipelineLayout(pipeline_layout_info);
 
-	vk::raii::Pipeline pipeline {
-		app->device,
-		nullptr,
-		vk::GraphicsPipelineCreateInfo {
-			{}, shader_stages,
-			&vertex_input_info, &input_assembly,
-			nullptr, &viewport_state, &rasterizer,
-			&multisampling, nullptr, &color_blending,
-			nullptr, *pipeline_layout, *render_pass,
-			0, nullptr, -1
-		}
-	};
+	littlevk::pipeline::GraphicsCreateInfo pipeline_info;
+	pipeline_info.vertex_binding = Vertex::binding();
+	pipeline_info.vertex_attributes = Vertex::attributes();
+	pipeline_info.vertex_shader = vertex_module;
+	pipeline_info.fragment_shader = fragment_module;
+	pipeline_info.extent = app->window->extent;
+	pipeline_info.pipeline_layout = pipeline_layout;
+	pipeline_info.render_pass = render_pass;
+
+	vk::Pipeline pipeline = *littlevk::pipeline::create(*app->device, pipeline_info);
+
+	// Syncronization primitives
+	auto sync = new littlevk::PresentSyncronization(app->device, 2);
 
 	// TODO: simple hello triangle...
         uint32_t frame = 0;
@@ -238,13 +169,13 @@ int main()
                         break;
 
 		littlevk::SurfaceOperation op;
-                op = littlevk::acquire_image(app->device, app->swapchain.swapchain, sync, frame);
+                op = littlevk::acquire_image(app->device, app->swapchain.swapchain, *sync, frame);
 
 		// Start empty render pass
 		vk::ClearValue clear_value = vk::ClearColorValue { std::array <float, 4> { 0.0f, 0.0f, 0.0f, 1.0f } };
 
 		vk::RenderPassBeginInfo render_pass_info {
-			*render_pass, *framebuffers[op.index],
+			render_pass, framebuffers[op.index],
 			vk::Rect2D { {}, app->window->extent },
 			1, &clear_value
 		};
@@ -253,7 +184,7 @@ int main()
 		command_buffers[frame].beginRenderPass(render_pass_info, vk::SubpassContents::eInline);
 
 		// Render the triangle
-		command_buffers[frame].bindPipeline(vk::PipelineBindPoint::eGraphics, *pipeline);
+		command_buffers[frame].bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
 		command_buffers[frame].bindVertexBuffers(0, vertex_buffer.buffer, { 0 });
 		command_buffers[frame].draw(3, 1, 0, 0);
 
@@ -264,23 +195,50 @@ int main()
 		vk::PipelineStageFlags wait_stage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
 
 		vk::SubmitInfo submit_info {
-			1, &*sync.image_available[frame],
+			1, &*sync->image_available[frame],
 			&wait_stage,
-			1, &*command_buffers[frame],
-			1, &*sync.render_finished[frame]
+			1, &command_buffers[frame],
+			1, &*sync->render_finished[frame]
 		};
 
-		app->graphics_queue.submit(submit_info, *sync.in_flight[frame]);
+		app->graphics_queue.submit(submit_info, *sync->in_flight[frame]);
 
-                op = littlevk::present_image(app->present_queue, app->swapchain.swapchain, sync, op.index);
+                op = littlevk::present_image(app->present_queue, app->swapchain.swapchain, *sync, op.index);
 		frame = 1 - frame;
 
 		// TODO: resize function
         }
 
-        // Delete applica
+	// Finish all pending operations
+	app->device.waitIdle();
+
+	// Free resources
+	(*app->device).freeCommandBuffers(command_pool, command_buffers);
+	(*app->device).destroyCommandPool(command_pool);
+	
+	littlevk::destroy_buffer(*app->device, vertex_buffer);
+
+	(*app->device).destroyShaderModule(vertex_module);
+	(*app->device).destroyShaderModule(fragment_module);
+
+	(*app->device).destroyPipelineLayout(pipeline_layout);
+	(*app->device).destroyPipeline(pipeline);
+
+	for (auto framebuffer : framebuffers)
+		(*app->device).destroyFramebuffer(framebuffer);
+
+	(*app->device).destroyRenderPass(render_pass);
+
+	// TODO: automatic destruction queue? record allocated objects and destroy them at the end with a single call?
+	// or, every allocation method returns a structure with a unwrap() method that automatically does this?
+
+	delete sync;
+
+        // Delete application
 	littlevk::destroy_application(app);
         delete app;
+
+	// TODO: address santizer to check leaks...
 
         return 0;
 }

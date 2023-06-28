@@ -11,76 +11,103 @@
 #include <optional>
 #include <regex>
 #include <set>
+#include <variant>
+
+// Miscellaneous standard library
+#include <stdarg.h>
 
 // Vulkan and GLFW
-// TODO: suppor other backends later
+// TODO: suppor other window apis later
 #include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan_enums.hpp>
 #include <vulkan/vulkan_raii.hpp>
+#include <vulkan/vulkan_structs.hpp>
 #include <GLFW/glfw3.h>
 
 // Glslang and SPIRV-Tools
 #include <glslang/SPIRV/GlslangToSpv.h>
 #include <glslang/Public/ResourceLimits.h>
 
-#define KOBRA_VALIDATION_LAYERS
-#define KOBRA_THROW_ERROR
-
 namespace littlevk {
 
-// Get (or create) the singleton context
-const vk::raii::Context &get_vulkan_context()
+namespace detail {
+
+// Configuration parameters (free to user modification)
+struct Config {
+	std::vector <const char *> instance_extensions {};
+	bool enable_validation_layers = true;
+	bool abort_on_validation_error = false;
+	bool enable_logging = true;
+};
+
+} // namespace detail
+
+// Singleton config
+inline detail::Config *config()
 {
-	// Global context
-	static vk::raii::Context context;
-	return context;
+	static detail::Config config;
+	return &config;
 }
 
-// Initialize GLFW statically
-// TODO: detail namespace
-void initialize_glfw()
-{
-	static bool initialized = false;
+namespace log {
 
-	if (!initialized) {
-		glfwInit();
-		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-		// glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-		initialized = true;
-	}
+// Colors and formatting
+// TODO: windows support
+struct colors {
+	static constexpr const char *error = "\033[31;1m";
+	static constexpr const char *info = "\033[34;1m";
+	static constexpr const char *reset = "\033[0m";
+	static constexpr const char *warning = "\033[33;1m";
+};
+
+inline void error(const char *header, const char *format, ...)
+{
+	// Always skip if logging is disabled
+	if (!config()->enable_logging)
+		return;
+
+	printf("%s[littlevk::error]%s (%s) ",
+		colors::error, colors::reset, header);
+
+	va_list args;
+	va_start(args, format);
+	vprintf(format, args);
+	va_end(args);
 }
 
-// TODO: namespace for balidation layers
-// Get (or generate) the required extensions
-const std::vector <const char *> &get_required_extensions()
+inline void warning(const char *header, const char *format, ...)
 {
-	// Vector to return
-	static std::vector <const char *> extensions;
+	// Always skip if logging is disabled
+	if (!config()->enable_logging)
+		return;
 
-	// Add if empty
-	if (extensions.empty()) {
-		// Add glfw extensions
-		uint32_t glfw_extension_count;
-		const char **glfw_extensions = glfwGetRequiredInstanceExtensions(&glfw_extension_count);
-		extensions.insert(extensions.end(), glfw_extensions, glfw_extensions + glfw_extension_count);
+	printf("%s[littlevk::warning]%s (%s) ",
+		colors::warning, colors::reset, header);
 
-		// Additional extensions
-		extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
-		extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
-		extensions.push_back(VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME);
-		extensions.push_back(VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME);
-
-		// TODO: config flag for validation layers
-#ifdef KOBRA_VALIDATION_LAYERS
-
-		// Add validation layers
-		extensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
-		extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-
-#endif
-	}
-
-	return extensions;
+	va_list args;
+	va_start(args, format);
+	vprintf(format, args);
+	va_end(args);
 }
+
+inline void info(const char *header, const char *format, ...)
+{
+	// Always skip if logging is disabled
+	if (!config()->enable_logging)
+		return;
+
+	printf("%s[littlevk::info]%s (%s) ",
+		colors::info, colors::reset, header);
+
+	va_list args;
+	va_start(args, format);
+	vprintf(format, args);
+	va_end(args);
+}
+
+} // namespace logging
+
+namespace validation {
 
 // Create debug messenger
 static bool check_validation_layer_support(const std::vector <const char *> &validation_layers)
@@ -115,10 +142,7 @@ static VkResult make_debug_messenger(const VkInstance &instance,
 		VkDebugUtilsMessengerEXT *debug_messenger)
 {
 	auto func = (PFN_vkCreateDebugUtilsMessengerEXT)
-		vkGetInstanceProcAddr(
-			instance,
-			"vkCreateDebugUtilsMessengerEXT"
-		);
+		vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
 
 	if (func != nullptr) {
 		return func(instance,
@@ -136,10 +160,7 @@ static void destroy_debug_messenger(const VkInstance &instance,
 		const VkAllocationCallbacks *allocator)
 {
 	auto func = (PFN_vkDestroyDebugUtilsMessengerEXT)
-		vkGetInstanceProcAddr(
-			instance,
-			"vkDestroyDebugUtilsMessengerEXT"
-		);
+		vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
 
 	if (func != nullptr) {
 		func(instance,
@@ -155,41 +176,82 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_logger
 		const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
 		void *pUserData)
 {
-	// TODO: split into disjoint if blocks...
-
 	// Errors
 	if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-		std::cerr << pCallbackData->pMessage << std::endl;
-
-#ifdef KOBRA_THROW_ERROR
-
-		throw std::runtime_error("[Vulkan Validation Layer] "
-			"An error occured in the validation layer");
-
-#endif
-
-#ifndef KOBRA_VALIDATION_ERROR_ONLY
-	// Warnings
+		log::error("validation", "%s\n", pCallbackData->pMessage);
+		if (config()->abort_on_validation_error)
+			abort();
 	} else if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-		std::cerr << pCallbackData->pMessage << std::endl;
-#ifdef KOBRA_THROW_WARNING
-		throw std::runtime_error("[Vulkan Validation Layer] "
-			"An warning occured in the validation layer");
-#endif
-	// Info
+		log::warning("validation", "%s\n", pCallbackData->pMessage);
 	} else {
-		std::cerr << pCallbackData->pMessage << std::endl;
-#endif
+		log::info("validation", "%s\n", pCallbackData->pMessage);
 	}
 
 	return VK_FALSE;
 }
 
+} // namespace validation
+
+namespace detail {
+
+// Get (or create) the singleton context
+inline const vk::raii::Context &get_vulkan_context()
+{
+	// Global context
+	static vk::raii::Context context;
+	return context;
+}
+
+// Initialize GLFW statically
+inline void initialize_glfw()
+{
+	static bool initialized = false;
+
+	if (!initialized) {
+		glfwInit();
+		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+		// glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+		initialized = true;
+	}
+}
+
+// Get (or generate) the required extensions
+inline const std::vector <const char *> &get_required_extensions()
+{
+	// Vector to return
+	static std::vector <const char *> extensions;
+
+	// Add if empty
+	if (extensions.empty()) {
+		// Add glfw extensions
+		uint32_t glfw_extension_count;
+		const char **glfw_extensions = glfwGetRequiredInstanceExtensions(&glfw_extension_count);
+		extensions.insert(extensions.end(), glfw_extensions, glfw_extensions + glfw_extension_count);
+
+		// Additional extensions
+		extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+		// extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+		// extensions.push_back(VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME);
+		// extensions.push_back(VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME);
+
+		if (config()->enable_validation_layers) {
+			// Add validation layers
+			extensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
+			extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+		}
+	}
+
+	return extensions;
+}
+
+
 // Get (or create) the singleton instance
-const vk::raii::Instance &get_vulkan_instance()
+inline const vk::raii::Instance &get_vulkan_instance()
 {
 	static bool initialized = false;
 	static vk::raii::Instance instance = nullptr;
+
+	// TODO: from config...
 	static vk::ApplicationInfo app_info {
 		"Kobra",
 		VK_MAKE_VERSION(1, 0, 0),
@@ -205,65 +267,58 @@ const vk::raii::Instance &get_vulkan_instance()
 	// Make sure GLFW is initialized
 	initialize_glfw();
 
-#ifdef KOBRA_VALIDATION_LAYERS
-
 	static const std::vector <const char *> validation_layers = {
 		"VK_LAYER_KHRONOS_validation"
 	};
 
-	// Check if validation layers are available
-	// KOBRA_ASSERT(
-	// 	check_validation_layer_support(validation_layers),
-	// 	"Validation layers are not available"
-	// );
-
-#endif
 	static vk::InstanceCreateInfo instance_info {
 		vk::InstanceCreateFlags(),
 		&app_info,
-
-#ifdef KOBRA_VALIDATION_LAYERS
-
-		static_cast <uint32_t> (validation_layers.size()),
-		validation_layers.data(),
-#else
-
 		0, nullptr,
-
-#endif
-
 		(uint32_t) get_required_extensions().size(),
 		get_required_extensions().data()
 	};
+
+	if (config()->enable_validation_layers) {
+		// Check if validation layers are available
+		if (!validation::check_validation_layer_support(validation_layers)) {
+			std::cerr << "Validation layers are not available" << std::endl;
+			config()->enable_validation_layers = false;
+		}
+
+		if (config()->enable_validation_layers) {
+			instance_info.enabledLayerCount = (uint32_t) validation_layers.size();
+			instance_info.ppEnabledLayerNames = validation_layers.data();
+		}
+	}
 
 	instance = vk::raii::Instance {
 		get_vulkan_context(),
 		instance_info
 	};
 
-#ifdef KOBRA_VALIDATION_LAYERS
+	if (config()->enable_validation_layers) {
+		// Create debug messenger
+		static constexpr vk::DebugUtilsMessengerCreateInfoEXT debug_messenger_info {
+			vk::DebugUtilsMessengerCreateFlagsEXT(),
+			vk::DebugUtilsMessageSeverityFlagBitsEXT::eError
+				| vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning
+				| vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose
+				| vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo,
+			vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral
+				| vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance
+				| vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation,
+			validation::debug_logger
+		};
 
-	static constexpr vk::DebugUtilsMessengerCreateInfoEXT debug_messenger_info {
-		vk::DebugUtilsMessengerCreateFlagsEXT(),
-		vk::DebugUtilsMessageSeverityFlagBitsEXT::eError
-			| vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning
-			| vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose
-			| vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo,
-		vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral
-			| vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance
-			| vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation,
-		debug_logger
-	};
+		static vk::raii::DebugUtilsMessengerEXT debug_messenger { instance, debug_messenger_info };
+	}
 
-	static vk::raii::DebugUtilsMessengerEXT debug_messenger
-		{instance, debug_messenger_info};
-
-#endif
-
-	// KOBRA_LOG_FUNC(Log::OK) << "Vulkan instance created\n";
 	initialized = true;
 	return instance;
 }
+
+} // namespace detail
 
 // Window typebackend
 struct Window {
@@ -275,10 +330,10 @@ struct Window {
 // TODO: littlevk logging using termcolor
 
 // Creating windows and surfaces
-Window *make_window(const vk::Extent2D &extent, const std::string &title)
+inline Window *make_window(const vk::Extent2D &extent, const std::string &title)
 {
         // Make sure GLFW is initialized
-	initialize_glfw();
+	detail::initialize_glfw();
 
         // Create the window
         GLFWwindow *handle = glfwCreateWindow(
@@ -295,7 +350,7 @@ Window *make_window(const vk::Extent2D &extent, const std::string &title)
         return new Window { handle, title, extent };
 }
 
-void destroy_window(Window *window)
+inline void destroy_window(Window *window)
 {
         if (window == nullptr)
                 return;
@@ -306,19 +361,19 @@ void destroy_window(Window *window)
         delete window;
 }
 
-vk::raii::SurfaceKHR make_surface(const Window &window)
+inline vk::raii::SurfaceKHR make_surface(const Window &window)
 {
 	// Create the surface
 	VkSurfaceKHR surface;
 	VkResult result = glfwCreateWindowSurface(
-		*get_vulkan_instance(),
+		*detail::get_vulkan_instance(),
 		window.handle,
 		nullptr,
 		&surface
 	);
 
 	// KOBRA_ASSERT(result == VK_SUCCESS, "Failed to create surface");
-	return vk::raii::SurfaceKHR { get_vulkan_instance(), surface };
+	return vk::raii::SurfaceKHR { detail::get_vulkan_instance(), surface };
 }
 
 // Coupling graphics and present queue families
@@ -328,7 +383,7 @@ struct QueueFamilyIndices {
 };
 
 // Find graphics queue family
-uint32_t find_graphics_queue_family(const vk::raii::PhysicalDevice &phdev)
+inline uint32_t find_graphics_queue_family(const vk::raii::PhysicalDevice &phdev)
 {
 	// Get the queue families
 	std::vector <vk::QueueFamilyProperties> queue_families =
@@ -346,7 +401,7 @@ uint32_t find_graphics_queue_family(const vk::raii::PhysicalDevice &phdev)
 }
 
 // Find present queue family
-uint32_t find_present_queue_family(const vk::raii::PhysicalDevice &phdev,
+inline uint32_t find_present_queue_family(const vk::raii::PhysicalDevice &phdev,
 		const vk::raii::SurfaceKHR &surface)
 {
 	// Get the queue families
@@ -365,7 +420,7 @@ uint32_t find_present_queue_family(const vk::raii::PhysicalDevice &phdev,
 }
 
 // Get both graphics and present queue families
-QueueFamilyIndices find_queue_families(const vk::raii::PhysicalDevice &phdev,
+inline QueueFamilyIndices find_queue_families(const vk::raii::PhysicalDevice &phdev,
 		const vk::raii::SurfaceKHR &surface)
 {
 	return {
@@ -377,7 +432,7 @@ QueueFamilyIndices find_queue_families(const vk::raii::PhysicalDevice &phdev,
 // Swapchain structure
 struct Swapchain {
 	vk::Format				format;
-	vk::raii::SwapchainKHR			swapchain = nullptr;
+	vk::raii::SwapchainKHR			swapchain = nullptr; // TODO: remove raii
 	std::vector <vk::Image>			images;
 	std::vector <vk::raii::ImageView>	image_views;
 
@@ -387,12 +442,13 @@ struct Swapchain {
                 const vk::Extent2D &,
                 const QueueFamilyIndices &,
                 const vk::raii::SwapchainKHR * = nullptr);
+
 	// Null constructor
 	Swapchain(std::nullptr_t) {}
 };
 
 // Pick a surface format
-vk::SurfaceFormatKHR pick_surface_format(const vk::raii::PhysicalDevice &phdev,
+inline vk::SurfaceFormatKHR pick_surface_format(const vk::raii::PhysicalDevice &phdev,
 		const vk::raii::SurfaceKHR &surface)
 {
 	// Constant formats
@@ -429,7 +485,7 @@ vk::SurfaceFormatKHR pick_surface_format(const vk::raii::PhysicalDevice &phdev,
 }
 
 // Pick a present mode
-vk::PresentModeKHR pick_present_mode(const vk::raii::PhysicalDevice &phdev,
+inline vk::PresentModeKHR pick_present_mode(const vk::raii::PhysicalDevice &phdev,
 		const vk::raii::SurfaceKHR &surface)
 {
 	// Constant modes
@@ -462,7 +518,7 @@ vk::PresentModeKHR pick_present_mode(const vk::raii::PhysicalDevice &phdev,
 	throw std::runtime_error("[Vulkan] No supported present mode found");
 }
 
-Swapchain::Swapchain(const vk::raii::PhysicalDevice &phdev,
+inline Swapchain::Swapchain(const vk::raii::PhysicalDevice &phdev,
                 const vk::raii::Device &device,
                 const vk::raii::SurfaceKHR &surface,
                 const vk::Extent2D &extent,
@@ -563,6 +619,34 @@ Swapchain::Swapchain(const vk::raii::PhysicalDevice &phdev,
         }
 }
 
+// Generate framebuffer from swapchain, render pass and optional depth buffer
+struct FramebufferSetInfo {
+	Swapchain *swapchain;
+	vk::RenderPass render_pass;
+	vk::Extent2D extent;
+	// TODO: depth buffer as well...
+	// vk::raii::ImageView *depth_buffer_view = nullptr;
+};
+
+inline std::vector <vk::Framebuffer> make_framebuffers(const vk::Device &device, const FramebufferSetInfo &info)
+{
+	std::vector <vk::Framebuffer> framebuffers;
+
+	for (const vk::raii::ImageView &view : info.swapchain->image_views) {
+		vk::ImageView views[] = { *view };
+
+		vk::FramebufferCreateInfo fb_info {
+			{}, info.render_pass,
+			1, views,
+			info.extent.width, info.extent.height, 1
+		};
+
+		framebuffers.emplace_back(device.createFramebuffer(fb_info));
+	}
+
+	return framebuffers;
+}
+
 struct PresentSyncronization {
 	// TODO: get rid of raii things...
         std::vector <vk::raii::Semaphore> image_available;
@@ -595,7 +679,7 @@ struct SurfaceOperation {
         uint32_t index;
 };
 
-SurfaceOperation acquire_image(const vk::raii::Device &device,
+inline SurfaceOperation acquire_image(const vk::raii::Device &device,
                 const vk::raii::SwapchainKHR &swapchain,
                 const PresentSyncronization &sync,
                 uint32_t frame)
@@ -619,7 +703,7 @@ SurfaceOperation acquire_image(const vk::raii::Device &device,
         return { SurfaceOperation::eOk, image_index };
 }
 
-SurfaceOperation present_image(const vk::raii::Queue &queue,
+inline SurfaceOperation present_image(const vk::raii::Queue &queue,
                 const vk::raii::SwapchainKHR &swapchain,
                 const PresentSyncronization &sync,
                 uint32_t index)
@@ -631,6 +715,7 @@ SurfaceOperation present_image(const vk::raii::Queue &queue,
         };
 
         try {
+		// TODO: check return value here
                 queue.presentKHR(present_info);
         } catch (vk::OutOfDateKHRError &e) {
                 std::cerr << "Swapchain out of date" << std::endl;
@@ -641,15 +726,14 @@ SurfaceOperation present_image(const vk::raii::Queue &queue,
 }
 
 // Get all available physical devices
-vk::raii::PhysicalDevices get_physical_devices()
+// TODO: unnecessary?
+inline vk::raii::PhysicalDevices get_physical_devices()
 {
-	return vk::raii::PhysicalDevices {
-		get_vulkan_instance()
-	};
+	return vk::raii::PhysicalDevices { detail::get_vulkan_instance() };
 }
 
 // Check if a physical device supports a set of extensions
-bool physical_device_able(const vk::raii::PhysicalDevice &phdev,
+inline bool physical_device_able(const vk::raii::PhysicalDevice &phdev,
 		const std::vector <const char *> &extensions)
 {
 	// Get the device extensions
@@ -672,7 +756,7 @@ bool physical_device_able(const vk::raii::PhysicalDevice &phdev,
 }
 
 // Pick physical device according to some criteria
-vk::raii::PhysicalDevice pick_physical_device
+inline vk::raii::PhysicalDevice pick_physical_device
 	(const std::function <bool (const vk::raii::PhysicalDevice &)> &predicate)
 {
 	// Get all the physical devices
@@ -702,7 +786,7 @@ struct ApplicationSkeleton {
 };
 
 // Create logical device on an arbitrary queue
-vk::raii::Device make_device(const vk::raii::PhysicalDevice &phdev,
+inline vk::raii::Device make_device(const vk::raii::PhysicalDevice &phdev,
 		const uint32_t queue_family,
 		const uint32_t queue_count,
 		const std::vector <const char *> &extensions)
@@ -735,7 +819,7 @@ vk::raii::Device make_device(const vk::raii::PhysicalDevice &phdev,
 }
 
 // Create a logical device
-vk::raii::Device make_device(const vk::raii::PhysicalDevice &phdev,
+inline vk::raii::Device make_device(const vk::raii::PhysicalDevice &phdev,
 		const QueueFamilyIndices &indices,
 		const std::vector <const char *> &extensions)
 {
@@ -744,7 +828,7 @@ vk::raii::Device make_device(const vk::raii::PhysicalDevice &phdev,
 	return make_device(phdev, indices.graphics, count, extensions);
 }
 
-void make_application(ApplicationSkeleton *app,
+inline void make_application(ApplicationSkeleton *app,
                 const vk::raii::PhysicalDevice &phdev,
                 const vk::Extent2D &extent,
                 const std::string &title)
@@ -769,7 +853,7 @@ void make_application(ApplicationSkeleton *app,
         app->present_queue = vk::raii::Queue { app->device, queue_family.present, 0 };
 }
 
-void destroy_application(ApplicationSkeleton *app)
+inline void destroy_application(ApplicationSkeleton *app)
 {
         destroy_window(app->window);
 }
@@ -782,7 +866,7 @@ struct Buffer {
 };
 
 // Find memory type
-uint32_t find_memory_type(const vk::PhysicalDeviceMemoryProperties &mem_props,
+inline uint32_t find_memory_type(const vk::PhysicalDeviceMemoryProperties &mem_props,
 		uint32_t type_filter,
 		vk::MemoryPropertyFlags properties)
 {
@@ -1073,39 +1157,17 @@ inline void destroy_image(const vk::Device &device, const Image &image)
         device.freeMemory(image.memory);
 }
 
-// TODO: namespace for shaders?
-// Custom shader programs
-class ShaderProgram {
-private:
-	bool m_failed = false;
-	std::string m_source;
-	vk::ShaderStageFlagBits	m_shader_type;
-public:
-        using Defines = std::map <std::string, std::string>;
-        using Includes = std::set <std::string>;
+namespace shader {
 
-	// Default constructor
-	ShaderProgram() = default;
+// TODO: detail here as well...
+using Defines = std::map <std::string, std::string>;
+using Includes = std::set <std::string>;
 
-	// Constructor
-	ShaderProgram(const std::string &, const vk::ShaderStageFlagBits &);
-
-	// Compile shader
-        // TODO: alias for the definitions map
-        std::optional <vk::ShaderModule>
-        compile(const vk::Device &, const Defines & = {}, const Includes & = {});
-
-        std::optional <vk::raii::ShaderModule>
-	compile(const vk::raii::Device &, const Defines & = {}, const Includes & = {});
-};
-
-// TODO: detail
-const std::string read_file(const std::filesystem::path &path)
+inline const std::string read_file(const std::filesystem::path &path)
 {
 	std::ifstream f(path);
 	if (!f.good()) {
 		printf("Could not open file: %s\n", path.c_str());
-		// KOBRA_LOG_FUNC(Log::ERROR) << "Could not open file: " << file << std::endl;
 		return "";
 	}
 
@@ -1162,9 +1224,6 @@ inline EShLanguage translate_shader_stage(const vk::ShaderStageFlagBits &stage)
 
 	return EShLangVertex;
 }
-
-// Includer class
-// static constexpr const char KOBRA_SHADER_INCLUDE_DIR[] = KOBRA_DIR "/source/shaders/";
 
 static std::string preprocess(const std::string &source,
 		const std::map <std::string, std::string> &defines,
@@ -1256,9 +1315,6 @@ static _compile_out glsl_to_spriv(const std::string &source,
         // Get possible include paths
         std::set <std::string> include_paths = paths;
 
-        // std::filesystem::path path = KOBRA_SHADER_INCLUDE_DIR;
-        // include_paths.insert(path.string());
-
         // Get the directory of the source file
 	std::string source_copy = preprocess(source, defines, include_paths);
 
@@ -1297,7 +1353,7 @@ static _compile_out glsl_to_spriv(const std::string &source,
 	return out;
 }
 
-std::string fmt_lines(const std::string &str)
+inline std::string fmt_lines(const std::string &str)
 {
 	// Add line numbers to each line
 	std::string out = "";
@@ -1314,42 +1370,25 @@ std::string fmt_lines(const std::string &str)
 	return out;
 }
 
-// Constructor
-// TODO: pass source file, not source itself...
-ShaderProgram::ShaderProgram
-		(const std::string &source,
-		const vk::ShaderStageFlagBits &shader_type)
-		: m_source(source), m_shader_type(shader_type) {}
-
 // Compile shader
-std::optional <vk::ShaderModule> ShaderProgram::compile(const vk::Device &device, const Defines &defines, const Includes &includes)
+inline std::optional <vk::ShaderModule> compile(const vk::Device &device,
+		const std::string &source,
+		const vk::ShaderStageFlagBits &shader_type,
+		const Defines &defines = {},
+		const Includes &includes = {})
 {
-	// If has failed before, don't try again
-	if (m_failed)
-		return std::nullopt;
-
 	// Check that file exists
 	glslang::InitializeProcess();
 
 	// Compile shader
-	_compile_out out = glsl_to_spriv(m_source, defines, includes, m_shader_type);
+	_compile_out out = glsl_to_spriv(source, defines, includes, shader_type);
 	if (!out.log.empty()) {
 		// TODO: show the errornous line(s)
 		std::cerr << "Shader compilation failed:\n" << out.log
 			<< "\nSource:\n" << fmt_lines(out.source) << "\n";
 
-		m_failed = true;
 		return std::nullopt;
 	}
-
-	// Create shader module
-	// return vk::raii::ShaderModule(
-	// 	device,
-	// 	vk::ShaderModuleCreateInfo(
-	// 		vk::ShaderModuleCreateFlags(),
-	// 		out.spirv
-	// 	)
-	// );
 
         vk::ShaderModuleCreateInfo create_info(
                 vk::ShaderModuleCreateFlags(),
@@ -1360,35 +1399,130 @@ std::optional <vk::ShaderModule> ShaderProgram::compile(const vk::Device &device
         return device.createShaderModule(create_info);
 }
 
-std::optional <vk::raii::ShaderModule> ShaderProgram::compile(const vk::raii::Device &device, const Defines &defines, const Includes &includes)
+inline std::optional <vk::ShaderModule> compile(const vk::Device &device,
+		const std::filesystem::path &path,
+		const vk::ShaderStageFlagBits &shader_type,
+		const Defines &defines = {},
+		const Includes &includes = {})
 {
-	// If has failed before, don't try again
-	if (m_failed)
-		return std::nullopt;
-
 	// Check that file exists
 	glslang::InitializeProcess();
 
 	// Compile shader
-	_compile_out out = glsl_to_spriv(m_source, defines, includes, m_shader_type);
+	std::string source = read_file(path);
+	_compile_out out = glsl_to_spriv(source, defines, includes, shader_type);
 	if (!out.log.empty()) {
 		// TODO: show the errornous line(s)
-		// KOBRA_LOG_FUNC(Log::ERROR)
-		// 	<< "Shader compilation failed:\n" << out.log
-		// 	<< "\nSource:\n" << fmt_lines(out.source) << "\n";
+		std::cerr << "Shader compilation failed:\n" << out.log
+			<< "\nSource:\n" << fmt_lines(out.source) << "\n";
 
-		m_failed = true;
 		return std::nullopt;
 	}
 
-	// Create shader module
-	return vk::raii::ShaderModule(
-		device,
-		vk::ShaderModuleCreateInfo(
-			vk::ShaderModuleCreateFlags(),
-			out.spirv
-		)
-	);
+        vk::ShaderModuleCreateInfo create_info(
+                vk::ShaderModuleCreateFlags(),
+                out.spirv.size() * sizeof(uint32_t),
+                out.spirv.data()
+        );
+
+        return device.createShaderModule(create_info);
 }
+
+} // namespace shader
+
+namespace pipeline {
+
+struct GraphicsCreateInfo {
+	vk::VertexInputBindingDescription vertex_binding;
+	vk::ArrayProxy <vk::VertexInputAttributeDescription> vertex_attributes;
+
+	vk::ShaderModule vertex_shader;
+	vk::ShaderModule fragment_shader;
+
+	bool dynamic_viewport = false;
+	vk::Extent2D extent;
+
+	vk::PipelineLayout pipeline_layout;
+	vk::RenderPass render_pass;
+};
+
+// TODO: remove as much raii as possible
+inline std::optional <vk::Pipeline> create(const vk::Device &device, const GraphicsCreateInfo &info)
+{
+	vk::PipelineShaderStageCreateInfo shader_stages[] = {
+		vk::PipelineShaderStageCreateInfo {
+			{}, vk::ShaderStageFlagBits::eVertex, info.vertex_shader, "main"
+		},
+		vk::PipelineShaderStageCreateInfo {
+			{}, vk::ShaderStageFlagBits::eFragment, info.fragment_shader, "main"
+		}
+	};
+
+	vk::PipelineVertexInputStateCreateInfo vertex_input_info {
+		{}, info.vertex_binding, info.vertex_attributes
+	};
+
+	vk::PipelineInputAssemblyStateCreateInfo input_assembly {
+		{}, vk::PrimitiveTopology::eTriangleList
+	};
+
+	// TODO: dynamic state options
+	assert(!info.dynamic_viewport); // NOTE: temporary
+	vk::Viewport viewport {
+		0.0f, 0.0f,
+		(float) info.extent.width, (float) info.extent.height,
+		0.0f, 1.0f
+	};
+
+	vk::Rect2D scissor { {}, info.extent };
+	vk::PipelineViewportStateCreateInfo viewport_state {
+		{}, 1, &viewport, 1, &scissor
+	};
+
+	vk::PipelineRasterizationStateCreateInfo rasterizer {
+		{}, false, false,
+		vk::PolygonMode::eFill,
+		vk::CullModeFlagBits::eBack,
+		vk::FrontFace::eClockwise,
+		false, 0.0f, 0.0f, 0.0f, 1.0f
+	};
+
+	vk::PipelineMultisampleStateCreateInfo multisampling {
+		{}, vk::SampleCountFlagBits::e1
+	};
+
+	vk::PipelineColorBlendAttachmentState color_blend_attachment {
+		false,
+		vk::BlendFactor::eOne, vk::BlendFactor::eZero, vk::BlendOp::eAdd,
+		vk::BlendFactor::eOne, vk::BlendFactor::eZero, vk::BlendOp::eAdd,
+		vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+		vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA
+	};
+
+	vk::PipelineColorBlendStateCreateInfo color_blending {
+		{}, false, vk::LogicOp::eCopy,
+		1, &color_blend_attachment,
+		{ 0.0f, 0.0f, 0.0f, 0.0f }
+	};
+
+	vk::PipelineLayoutCreateInfo pipeline_layout_info {
+		{}, 0, nullptr, 0, nullptr
+	};
+
+	return device.createGraphicsPipeline(nullptr,
+		vk::GraphicsPipelineCreateInfo {
+			{}, shader_stages,
+			&vertex_input_info, &input_assembly,
+			nullptr, &viewport_state, &rasterizer,
+			&multisampling, nullptr, &color_blending,
+			nullptr, info.pipeline_layout, info.render_pass,
+			0, nullptr, -1
+		}
+	).value;
+}
+
+struct ComputeCreateInfo {};
+
+} // namespace pipeline
 
 }
