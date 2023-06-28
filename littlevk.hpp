@@ -361,7 +361,7 @@ inline void destroy_window(Window *window)
         delete window;
 }
 
-inline vk::raii::SurfaceKHR make_surface(const Window &window)
+inline vk::SurfaceKHR make_surface(const Window &window)
 {
 	// Create the surface
 	VkSurfaceKHR surface;
@@ -372,8 +372,10 @@ inline vk::raii::SurfaceKHR make_surface(const Window &window)
 		&surface
 	);
 
+	return static_cast <vk::SurfaceKHR> (surface);
+
 	// KOBRA_ASSERT(result == VK_SUCCESS, "Failed to create surface");
-	return vk::raii::SurfaceKHR { detail::get_vulkan_instance(), surface };
+	// return vk::raii::SurfaceKHR { detail::get_vulkan_instance(), surface };
 }
 
 // Coupling graphics and present queue families
@@ -401,8 +403,7 @@ inline uint32_t find_graphics_queue_family(const vk::raii::PhysicalDevice &phdev
 }
 
 // Find present queue family
-inline uint32_t find_present_queue_family(const vk::raii::PhysicalDevice &phdev,
-		const vk::raii::SurfaceKHR &surface)
+inline uint32_t find_present_queue_family(const vk::raii::PhysicalDevice &phdev, const vk::SurfaceKHR &surface)
 {
 	// Get the queue families
 	std::vector <vk::QueueFamilyProperties> queue_families =
@@ -410,7 +411,7 @@ inline uint32_t find_present_queue_family(const vk::raii::PhysicalDevice &phdev,
 
 	// Find the first one that supports presentation
 	for (uint32_t i = 0; i < queue_families.size(); i++) {
-		if (phdev.getSurfaceSupportKHR(i, *surface))
+		if (phdev.getSurfaceSupportKHR(i, surface))
 			return i;
 	}
 
@@ -420,8 +421,7 @@ inline uint32_t find_present_queue_family(const vk::raii::PhysicalDevice &phdev,
 }
 
 // Get both graphics and present queue families
-inline QueueFamilyIndices find_queue_families(const vk::raii::PhysicalDevice &phdev,
-		const vk::raii::SurfaceKHR &surface)
+inline QueueFamilyIndices find_queue_families(const vk::raii::PhysicalDevice &phdev, const vk::SurfaceKHR &surface)
 {
 	return {
 		find_graphics_queue_family(phdev),
@@ -431,25 +431,14 @@ inline QueueFamilyIndices find_queue_families(const vk::raii::PhysicalDevice &ph
 
 // Swapchain structure
 struct Swapchain {
-	vk::Format				format;
-	vk::raii::SwapchainKHR			swapchain = nullptr; // TODO: remove raii
-	std::vector <vk::Image>			images;
-	std::vector <vk::raii::ImageView>	image_views;
-
-        Swapchain(const vk::raii::PhysicalDevice &,
-                const vk::raii::Device &,
-                const vk::raii::SurfaceKHR &,
-                const vk::Extent2D &,
-                const QueueFamilyIndices &,
-                const vk::raii::SwapchainKHR * = nullptr);
-
-	// Null constructor
-	Swapchain(std::nullptr_t) {}
+	vk::Format format;
+	vk::SwapchainKHR swapchain;
+	std::vector <vk::Image> images;
+	std::vector <vk::ImageView> image_views;
 };
 
 // Pick a surface format
-inline vk::SurfaceFormatKHR pick_surface_format(const vk::raii::PhysicalDevice &phdev,
-		const vk::raii::SurfaceKHR &surface)
+inline vk::SurfaceFormatKHR pick_surface_format(const vk::raii::PhysicalDevice &phdev, const vk::SurfaceKHR &surface)
 {
 	// Constant formats
 	static const std::vector <vk::SurfaceFormatKHR> target_formats = {
@@ -457,8 +446,7 @@ inline vk::SurfaceFormatKHR pick_surface_format(const vk::raii::PhysicalDevice &
 	};
 
 	// Get the surface formats
-	std::vector <vk::SurfaceFormatKHR> formats =
-			phdev.getSurfaceFormatsKHR(*surface);
+	std::vector <vk::SurfaceFormatKHR> formats = phdev.getSurfaceFormatsKHR(surface);
 
 	// If there is only one format, return it
 	if (formats.size() == 1 && formats[0].format == vk::Format::eUndefined) {
@@ -485,8 +473,7 @@ inline vk::SurfaceFormatKHR pick_surface_format(const vk::raii::PhysicalDevice &
 }
 
 // Pick a present mode
-inline vk::PresentModeKHR pick_present_mode(const vk::raii::PhysicalDevice &phdev,
-		const vk::raii::SurfaceKHR &surface)
+inline vk::PresentModeKHR pick_present_mode(const vk::raii::PhysicalDevice &phdev, const vk::SurfaceKHR &surface)
 {
 	// Constant modes
 	static const std::vector <vk::PresentModeKHR> target_modes = {
@@ -496,8 +483,7 @@ inline vk::PresentModeKHR pick_present_mode(const vk::raii::PhysicalDevice &phde
 	};
 
 	// Get the present modes
-	std::vector <vk::PresentModeKHR> modes =
-			phdev.getSurfacePresentModesKHR(*surface);
+	std::vector <vk::PresentModeKHR> modes = phdev.getSurfacePresentModesKHR(surface);
 
 	// Prioritize mailbox mode
 	if (std::find(modes.begin(), modes.end(), vk::PresentModeKHR::eMailbox) !=
@@ -518,20 +504,23 @@ inline vk::PresentModeKHR pick_present_mode(const vk::raii::PhysicalDevice &phde
 	throw std::runtime_error("[Vulkan] No supported present mode found");
 }
 
-inline Swapchain::Swapchain(const vk::raii::PhysicalDevice &phdev,
-                const vk::raii::Device &device,
-                const vk::raii::SurfaceKHR &surface,
+// Swapchain allocation and destruction
+// TODO: info struct...
+inline Swapchain make_swapchain(const vk::raii::PhysicalDevice &phdev,
+                const vk::Device &device,
+                const vk::SurfaceKHR &surface,
                 const vk::Extent2D &extent,
                 const QueueFamilyIndices &indices,
-                const vk::raii::SwapchainKHR *old_swapchain)
+                const vk::raii::SwapchainKHR *old_swapchain = nullptr)
 {
+	Swapchain swapchain;
+
         // Pick a surface format
         auto surface_format = pick_surface_format(phdev, surface);
-        format = surface_format.format;
+        swapchain.format = surface_format.format;
 
         // Surface capabilities and extent
-        vk::SurfaceCapabilitiesKHR capabilities =
-                        phdev.getSurfaceCapabilitiesKHR(*surface);
+        vk::SurfaceCapabilitiesKHR capabilities = phdev.getSurfaceCapabilitiesKHR(surface);
 
         // Set the surface extent
         vk::Extent2D swapchain_extent = extent;
@@ -571,9 +560,9 @@ inline Swapchain::Swapchain(const vk::raii::PhysicalDevice &phdev,
         // Creation info
         vk::SwapchainCreateInfoKHR create_info {
                 {},
-                *surface,
+                surface,
                 capabilities.minImageCount,
-                format,
+                swapchain.format,
                 surface_format.colorSpace,
                 swapchain_extent,
                 1,
@@ -596,16 +585,16 @@ inline Swapchain::Swapchain(const vk::raii::PhysicalDevice &phdev,
         }
 
         // Create the swapchain
-        swapchain = vk::raii::SwapchainKHR(device, create_info);
+        swapchain.swapchain = device.createSwapchainKHR(create_info);
 
         // Get the swapchain images
-        images = swapchain.getImages();
+	swapchain.images = device.getSwapchainImagesKHR(swapchain.swapchain);
 
         // Create image views
         vk::ImageViewCreateInfo create_view_info {
                 {}, {},
                 vk::ImageViewType::e2D,
-                format,
+                swapchain.format,
                 {},
                 vk::ImageSubresourceRange(
                         vk::ImageAspectFlagBits::eColor,
@@ -613,10 +602,22 @@ inline Swapchain::Swapchain(const vk::raii::PhysicalDevice &phdev,
                 )
         };
 
-        for (size_t i = 0; i < images.size(); i++) {
-                create_view_info.image = images[i];
-                image_views.emplace_back(device, create_view_info);
+        for (size_t i = 0; i < swapchain.images.size(); i++) {
+                create_view_info.image = swapchain.images[i];
+                swapchain.image_views.emplace_back(device.createImageView(create_view_info));
         }
+
+	return swapchain;
+}
+
+inline void destroy_swapchain(const vk::Device &device, Swapchain &swapchain)
+{
+	// Destroy image views
+	for (const vk::ImageView &view : swapchain.image_views)
+		device.destroyImageView(view);
+
+	// Destroy swapchain
+	device.destroySwapchainKHR(swapchain.swapchain);
 }
 
 // Generate framebuffer from swapchain, render pass and optional depth buffer
@@ -625,19 +626,18 @@ struct FramebufferSetInfo {
 	vk::RenderPass render_pass;
 	vk::Extent2D extent;
 	// TODO: depth buffer as well...
-	// vk::raii::ImageView *depth_buffer_view = nullptr;
+	// vk::ImageView *depth_buffer_view = nullptr;
 };
 
 inline std::vector <vk::Framebuffer> make_framebuffers(const vk::Device &device, const FramebufferSetInfo &info)
 {
 	std::vector <vk::Framebuffer> framebuffers;
 
-	for (const vk::raii::ImageView &view : info.swapchain->image_views) {
-		vk::ImageView views[] = { *view };
+	for (const vk::ImageView &view : info.swapchain->image_views) {
+		std::array <vk::ImageView, 1> fb_views { view };
 
 		vk::FramebufferCreateInfo fb_info {
-			{}, info.render_pass,
-			1, views,
+			{}, info.render_pass, fb_views,
 			info.extent.width, info.extent.height, 1
 		};
 
@@ -649,25 +649,42 @@ inline std::vector <vk::Framebuffer> make_framebuffers(const vk::Device &device,
 
 struct PresentSyncronization {
 	// TODO: get rid of raii things...
-        std::vector <vk::raii::Semaphore> image_available;
-        std::vector <vk::raii::Semaphore> render_finished;
-        std::vector <vk::raii::Fence> in_flight;
-
-        PresentSyncronization(const vk::raii::Device &device, uint32_t frames_in_flight) {
-                // Default semaphores
-                vk::SemaphoreCreateInfo semaphore_info {};
-
-                // Signaled fences
-                vk::FenceCreateInfo fence_info {};
-                fence_info.flags = vk::FenceCreateFlagBits::eSignaled;
-
-                for (uint32_t i = 0; i < frames_in_flight; i++) {
-                        image_available.push_back(device.createSemaphore(semaphore_info));
-                        render_finished.push_back(device.createSemaphore(semaphore_info));
-                        in_flight.push_back(device.createFence(fence_info));
-                }
-        }
+        std::vector <vk::Semaphore> image_available;
+        std::vector <vk::Semaphore> render_finished;
+        std::vector <vk::Fence> in_flight;
 };
+
+inline PresentSyncronization make_present_syncronization(const vk::Device &device, uint32_t frames_in_flight)
+{
+	PresentSyncronization sync;
+
+	// Default semaphores
+	vk::SemaphoreCreateInfo semaphore_info {};
+
+	// Signaled fences
+	vk::FenceCreateInfo fence_info {};
+	fence_info.flags = vk::FenceCreateFlagBits::eSignaled;
+
+	for (uint32_t i = 0; i < frames_in_flight; i++) {
+		sync.image_available.push_back(device.createSemaphore(semaphore_info));
+		sync.render_finished.push_back(device.createSemaphore(semaphore_info));
+		sync.in_flight.push_back(device.createFence(fence_info));
+	}
+
+	return sync;
+}
+
+inline void destroy_present_syncronization(const vk::Device &device, const PresentSyncronization &sync)
+{
+	for (const vk::Semaphore &semaphore : sync.image_available)
+		device.destroySemaphore(semaphore);
+
+	for (const vk::Semaphore &semaphore : sync.render_finished)
+		device.destroySemaphore(semaphore);
+
+	for (const vk::Fence &fence : sync.in_flight)
+		device.destroyFence(fence);
+}
 
 struct SurfaceOperation {
         enum {
@@ -679,16 +696,17 @@ struct SurfaceOperation {
         uint32_t index;
 };
 
-inline SurfaceOperation acquire_image(const vk::raii::Device &device,
-                const vk::raii::SwapchainKHR &swapchain,
+inline SurfaceOperation acquire_image(const vk::Device &device,
+                const vk::SwapchainKHR &swapchain,
                 const PresentSyncronization &sync,
                 uint32_t frame)
 {
         // Wait for previous frame to finish
-        device.waitForFences(*sync.in_flight[frame], VK_TRUE, UINT64_MAX);
+        device.waitForFences(sync.in_flight[frame], VK_TRUE, UINT64_MAX);
 
         // Acquire image
-        auto [result, image_index] = swapchain.acquireNextImage(UINT64_MAX, *sync.image_available[frame], nullptr);
+        auto [result, image_index] = device.acquireNextImageKHR(swapchain, UINT64_MAX, sync.image_available[frame], nullptr);
+
         if (result == vk::Result::eErrorOutOfDateKHR) {
                 std::cerr << "Swapchain out of date" << std::endl;
                 return { SurfaceOperation::eResize, 0 };
@@ -698,19 +716,19 @@ inline SurfaceOperation acquire_image(const vk::raii::Device &device,
         }
 
         // Reset fence to prepare for next frame
-        device.resetFences(*sync.in_flight[frame]);
+        device.resetFences(sync.in_flight[frame]);
 
         return { SurfaceOperation::eOk, image_index };
 }
 
-inline SurfaceOperation present_image(const vk::raii::Queue &queue,
-                const vk::raii::SwapchainKHR &swapchain,
+inline SurfaceOperation present_image(const vk::Queue &queue,
+                const vk::SwapchainKHR &swapchain,
                 const PresentSyncronization &sync,
                 uint32_t index)
 {
         vk::PresentInfoKHR present_info {
-                *sync.render_finished[index],
-                *swapchain,
+                sync.render_finished[index],
+                swapchain,
                 index
         };
 
@@ -774,19 +792,19 @@ inline vk::raii::PhysicalDevice pick_physical_device
 }
 
 struct ApplicationSkeleton {
-        vk::raii::Device device = nullptr;
+        vk::Device device;
         vk::raii::PhysicalDevice phdev = nullptr;
-        vk::raii::SurfaceKHR surface = nullptr;
+        vk::SurfaceKHR surface;
 
-        vk::raii::Queue graphics_queue = nullptr;
-        vk::raii::Queue present_queue = nullptr;
+        vk::Queue graphics_queue;
+        vk::Queue present_queue;
 
-        Swapchain swapchain = nullptr;
+        Swapchain swapchain;
         Window *window = nullptr;
 };
 
 // Create logical device on an arbitrary queue
-inline vk::raii::Device make_device(const vk::raii::PhysicalDevice &phdev,
+inline vk::Device make_device(const vk::raii::PhysicalDevice &phdev,
 		const uint32_t queue_family,
 		const uint32_t queue_count,
 		const std::vector <const char *> &extensions)
@@ -813,13 +831,11 @@ inline vk::raii::Device make_device(const vk::raii::PhysicalDevice &phdev,
 		{}, extensions, &device_features, nullptr
 	};
 
-	return vk::raii::Device {
-		phdev, device_info
-	};
+	return (*phdev).createDevice(device_info);
 }
 
 // Create a logical device
-inline vk::raii::Device make_device(const vk::raii::PhysicalDevice &phdev,
+inline vk::Device make_device(const vk::raii::PhysicalDevice &phdev,
 		const QueueFamilyIndices &indices,
 		const std::vector <const char *> &extensions)
 {
@@ -844,18 +860,23 @@ inline void make_application(ApplicationSkeleton *app,
 
         QueueFamilyIndices queue_family = find_queue_families(phdev, app->surface);
         app->device = make_device(phdev, queue_family, device_extensions);
-	app->swapchain = Swapchain {
+	app->swapchain = make_swapchain(
                 phdev, app->device, app->surface,
                 app->window->extent, queue_family
-        };
+	);
 
-        app->graphics_queue = vk::raii::Queue { app->device, queue_family.graphics, 0 };
-        app->present_queue = vk::raii::Queue { app->device, queue_family.present, 0 };
+        // app->graphics_queue = vk::raii::Queue { app->device, queue_family.graphics, 0 };
+        // app->present_queue = vk::raii::Queue { app->device, queue_family.present, 0 };
+        app->graphics_queue = app->device.getQueue(queue_family.graphics, 0);
+        app->present_queue = app->device.getQueue(queue_family.present, 0);
 }
 
 inline void destroy_application(ApplicationSkeleton *app)
 {
         destroy_window(app->window);
+	destroy_swapchain(app->device, app->swapchain);
+	(*detail::get_vulkan_instance()).destroySurfaceKHR(app->surface);
+	app->device.destroy();
 }
 
 // Vulkan buffer wrapper
