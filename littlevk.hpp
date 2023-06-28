@@ -20,13 +20,45 @@
 // TODO: suppor other window apis later
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_enums.hpp>
-#include <vulkan/vulkan_raii.hpp>
+#include <vulkan/vulkan_handles.hpp>
 #include <vulkan/vulkan_structs.hpp>
 #include <GLFW/glfw3.h>
 
 // Glslang and SPIRV-Tools
 #include <glslang/SPIRV/GlslangToSpv.h>
 #include <glslang/Public/ResourceLimits.h>
+
+// Loading Vulkan extensions
+// TODO: note to users that this is being done...
+static PFN_vkCreateDebugUtilsMessengerEXT __vkCreateDebugUtilsMessengerEXT = 0;
+static PFN_vkDestroyDebugUtilsMessengerEXT __vkDestroyDebugUtilsMessengerEXT = 0;
+
+inline VKAPI_ATTR VkResult VKAPI_CALL
+vkCreateDebugUtilsMessengerEXT(VkInstance instance,
+		const VkDebugUtilsMessengerCreateInfoEXT *create_info,
+		const VkAllocationCallbacks *allocator,
+		VkDebugUtilsMessengerEXT *debug_messenger)
+{
+	if (!__vkCreateDebugUtilsMessengerEXT) {
+		__vkCreateDebugUtilsMessengerEXT = (PFN_vkCreateDebugUtilsMessengerEXT)
+			vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
+	}
+
+	return __vkCreateDebugUtilsMessengerEXT(instance, create_info, allocator, debug_messenger);
+}
+
+inline VKAPI_ATTR void VKAPI_CALL
+vkDestroyDebugUtilsMessengerEXT(VkInstance instance,
+		VkDebugUtilsMessengerEXT debug_messenger,
+		const VkAllocationCallbacks *allocator)
+{
+	if (!__vkDestroyDebugUtilsMessengerEXT) {
+		__vkDestroyDebugUtilsMessengerEXT = (PFN_vkDestroyDebugUtilsMessengerEXT)
+			vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
+	}
+
+	__vkDestroyDebugUtilsMessengerEXT(instance, debug_messenger, allocator);
+}
 
 namespace littlevk {
 
@@ -143,6 +175,7 @@ static VkResult make_debug_messenger(const VkInstance &instance,
 {
 	auto func = (PFN_vkCreateDebugUtilsMessengerEXT)
 		vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
+	printf("func: %p\n", func);
 
 	if (func != nullptr) {
 		return func(instance,
@@ -151,6 +184,8 @@ static VkResult make_debug_messenger(const VkInstance &instance,
 			debug_messenger
 		);
 	}
+
+	throw std::runtime_error("failed to set up debug messenger");
 
 	return VK_ERROR_EXTENSION_NOT_PRESENT;
 }
@@ -194,14 +229,6 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_logger
 
 namespace detail {
 
-// Get (or create) the singleton context
-inline const vk::raii::Context &get_vulkan_context()
-{
-	// Global context
-	static vk::raii::Context context;
-	return context;
-}
-
 // Initialize GLFW statically
 inline void initialize_glfw()
 {
@@ -230,9 +257,7 @@ inline const std::vector <const char *> &get_required_extensions()
 
 		// Additional extensions
 		extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
-		// extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
-		// extensions.push_back(VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME);
-		// extensions.push_back(VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME);
+		// TODO: add config extensions
 
 		if (config()->enable_validation_layers) {
 			// Add validation layers
@@ -246,10 +271,10 @@ inline const std::vector <const char *> &get_required_extensions()
 
 
 // Get (or create) the singleton instance
-inline const vk::raii::Instance &get_vulkan_instance()
+inline const vk::Instance &get_vulkan_instance()
 {
 	static bool initialized = false;
-	static vk::raii::Instance instance = nullptr;
+	static vk::Instance instance;
 
 	// TODO: from config...
 	static vk::ApplicationInfo app_info {
@@ -292,11 +317,7 @@ inline const vk::raii::Instance &get_vulkan_instance()
 		}
 	}
 
-	instance = vk::raii::Instance {
-		get_vulkan_context(),
-		instance_info
-	};
-
+	instance = vk::createInstance(instance_info);
 	if (config()->enable_validation_layers) {
 		// Create debug messenger
 		static constexpr vk::DebugUtilsMessengerCreateInfoEXT debug_messenger_info {
@@ -311,7 +332,19 @@ inline const vk::raii::Instance &get_vulkan_instance()
 			validation::debug_logger
 		};
 
-		static vk::raii::DebugUtilsMessengerEXT debug_messenger { instance, debug_messenger_info };
+		// TODO: deallocation queue...
+		struct DebugMessengerWrapper {
+			vk::Instance instance;
+			vk::DebugUtilsMessengerEXT debug_messenger;
+
+			~DebugMessengerWrapper()
+			{
+				instance.destroyDebugUtilsMessengerEXT(debug_messenger);
+			}
+		};
+
+		auto debug_messenger = instance.createDebugUtilsMessengerEXT(debug_messenger_info);
+		static DebugMessengerWrapper wrapper { instance, debug_messenger };
 	}
 
 	initialized = true;
@@ -366,16 +399,11 @@ inline vk::SurfaceKHR make_surface(const Window &window)
 	// Create the surface
 	VkSurfaceKHR surface;
 	VkResult result = glfwCreateWindowSurface(
-		*detail::get_vulkan_instance(),
-		window.handle,
-		nullptr,
-		&surface
+		detail::get_vulkan_instance(),
+		window.handle, nullptr, &surface
 	);
 
 	return static_cast <vk::SurfaceKHR> (surface);
-
-	// KOBRA_ASSERT(result == VK_SUCCESS, "Failed to create surface");
-	// return vk::raii::SurfaceKHR { detail::get_vulkan_instance(), surface };
 }
 
 // Coupling graphics and present queue families
@@ -385,11 +413,10 @@ struct QueueFamilyIndices {
 };
 
 // Find graphics queue family
-inline uint32_t find_graphics_queue_family(const vk::raii::PhysicalDevice &phdev)
+inline uint32_t find_graphics_queue_family(const vk::PhysicalDevice &phdev)
 {
 	// Get the queue families
-	std::vector <vk::QueueFamilyProperties> queue_families =
-			phdev.getQueueFamilyProperties();
+	std::vector <vk::QueueFamilyProperties> queue_families = phdev.getQueueFamilyProperties();
 
 	// Find the first one that supports graphics
 	for (uint32_t i = 0; i < queue_families.size(); i++) {
@@ -403,11 +430,10 @@ inline uint32_t find_graphics_queue_family(const vk::raii::PhysicalDevice &phdev
 }
 
 // Find present queue family
-inline uint32_t find_present_queue_family(const vk::raii::PhysicalDevice &phdev, const vk::SurfaceKHR &surface)
+inline uint32_t find_present_queue_family(const vk::PhysicalDevice &phdev, const vk::SurfaceKHR &surface)
 {
 	// Get the queue families
-	std::vector <vk::QueueFamilyProperties> queue_families =
-			phdev.getQueueFamilyProperties();
+	std::vector <vk::QueueFamilyProperties> queue_families = phdev.getQueueFamilyProperties();
 
 	// Find the first one that supports presentation
 	for (uint32_t i = 0; i < queue_families.size(); i++) {
@@ -421,7 +447,7 @@ inline uint32_t find_present_queue_family(const vk::raii::PhysicalDevice &phdev,
 }
 
 // Get both graphics and present queue families
-inline QueueFamilyIndices find_queue_families(const vk::raii::PhysicalDevice &phdev, const vk::SurfaceKHR &surface)
+inline QueueFamilyIndices find_queue_families(const vk::PhysicalDevice &phdev, const vk::SurfaceKHR &surface)
 {
 	return {
 		find_graphics_queue_family(phdev),
@@ -438,7 +464,7 @@ struct Swapchain {
 };
 
 // Pick a surface format
-inline vk::SurfaceFormatKHR pick_surface_format(const vk::raii::PhysicalDevice &phdev, const vk::SurfaceKHR &surface)
+inline vk::SurfaceFormatKHR pick_surface_format(const vk::PhysicalDevice &phdev, const vk::SurfaceKHR &surface)
 {
 	// Constant formats
 	static const std::vector <vk::SurfaceFormatKHR> target_formats = {
@@ -473,7 +499,7 @@ inline vk::SurfaceFormatKHR pick_surface_format(const vk::raii::PhysicalDevice &
 }
 
 // Pick a present mode
-inline vk::PresentModeKHR pick_present_mode(const vk::raii::PhysicalDevice &phdev, const vk::SurfaceKHR &surface)
+inline vk::PresentModeKHR pick_present_mode(const vk::PhysicalDevice &phdev, const vk::SurfaceKHR &surface)
 {
 	// Constant modes
 	static const std::vector <vk::PresentModeKHR> target_modes = {
@@ -506,12 +532,12 @@ inline vk::PresentModeKHR pick_present_mode(const vk::raii::PhysicalDevice &phde
 
 // Swapchain allocation and destruction
 // TODO: info struct...
-inline Swapchain make_swapchain(const vk::raii::PhysicalDevice &phdev,
+inline Swapchain make_swapchain(const vk::PhysicalDevice &phdev,
                 const vk::Device &device,
                 const vk::SurfaceKHR &surface,
                 const vk::Extent2D &extent,
                 const QueueFamilyIndices &indices,
-                const vk::raii::SwapchainKHR *old_swapchain = nullptr)
+                const vk::SwapchainKHR *old_swapchain = nullptr)
 {
 	Swapchain swapchain;
 
@@ -574,7 +600,7 @@ inline Swapchain make_swapchain(const vk::raii::PhysicalDevice &phdev,
                 composite_alpha,
                 present_mode,
                 true,
-                (old_swapchain ? **old_swapchain : nullptr)
+                (old_swapchain ? *old_swapchain : nullptr)
         };
 
         // In case graphics and present queues are different
@@ -648,7 +674,6 @@ inline std::vector <vk::Framebuffer> make_framebuffers(const vk::Device &device,
 }
 
 struct PresentSyncronization {
-	// TODO: get rid of raii things...
         std::vector <vk::Semaphore> image_available;
         std::vector <vk::Semaphore> render_finished;
         std::vector <vk::Fence> in_flight;
@@ -743,16 +768,8 @@ inline SurfaceOperation present_image(const vk::Queue &queue,
         return { SurfaceOperation::eOk, 0 };
 }
 
-// Get all available physical devices
-// TODO: unnecessary?
-inline vk::raii::PhysicalDevices get_physical_devices()
-{
-	return vk::raii::PhysicalDevices { detail::get_vulkan_instance() };
-}
-
 // Check if a physical device supports a set of extensions
-inline bool physical_device_able(const vk::raii::PhysicalDevice &phdev,
-		const std::vector <const char *> &extensions)
+inline bool physical_device_able(const vk::PhysicalDevice &phdev, const std::vector <const char *> &extensions)
 {
 	// Get the device extensions
 	std::vector <vk::ExtensionProperties> device_extensions =
@@ -774,14 +791,13 @@ inline bool physical_device_able(const vk::raii::PhysicalDevice &phdev,
 }
 
 // Pick physical device according to some criteria
-inline vk::raii::PhysicalDevice pick_physical_device
-	(const std::function <bool (const vk::raii::PhysicalDevice &)> &predicate)
+inline vk::PhysicalDevice pick_physical_device(const std::function <bool (const vk::PhysicalDevice &)> &predicate)
 {
 	// Get all the physical devices
-	vk::raii::PhysicalDevices devices = get_physical_devices();
+	auto devices = detail::get_vulkan_instance().enumeratePhysicalDevices();
 
 	// Find the first one that satisfies the predicate
-	for (const vk::raii::PhysicalDevice &device : devices) {
+	for (const vk::PhysicalDevice &device : devices) {
 		if (predicate(device))
 			return device;
 	}
@@ -793,7 +809,7 @@ inline vk::raii::PhysicalDevice pick_physical_device
 
 struct ApplicationSkeleton {
         vk::Device device;
-        vk::raii::PhysicalDevice phdev = nullptr;
+        vk::PhysicalDevice phdev = nullptr;
         vk::SurfaceKHR surface;
 
         vk::Queue graphics_queue;
@@ -804,7 +820,7 @@ struct ApplicationSkeleton {
 };
 
 // Create logical device on an arbitrary queue
-inline vk::Device make_device(const vk::raii::PhysicalDevice &phdev,
+inline vk::Device make_device(const vk::PhysicalDevice &phdev,
 		const uint32_t queue_family,
 		const uint32_t queue_count,
 		const std::vector <const char *> &extensions)
@@ -831,11 +847,11 @@ inline vk::Device make_device(const vk::raii::PhysicalDevice &phdev,
 		{}, extensions, &device_features, nullptr
 	};
 
-	return (*phdev).createDevice(device_info);
+	return phdev.createDevice(device_info);
 }
 
 // Create a logical device
-inline vk::Device make_device(const vk::raii::PhysicalDevice &phdev,
+inline vk::Device make_device(const vk::PhysicalDevice &phdev,
 		const QueueFamilyIndices &indices,
 		const std::vector <const char *> &extensions)
 {
@@ -845,7 +861,7 @@ inline vk::Device make_device(const vk::raii::PhysicalDevice &phdev,
 }
 
 inline void make_application(ApplicationSkeleton *app,
-                const vk::raii::PhysicalDevice &phdev,
+                const vk::PhysicalDevice &phdev,
                 const vk::Extent2D &extent,
                 const std::string &title)
 {
@@ -865,8 +881,6 @@ inline void make_application(ApplicationSkeleton *app,
                 app->window->extent, queue_family
 	);
 
-        // app->graphics_queue = vk::raii::Queue { app->device, queue_family.graphics, 0 };
-        // app->present_queue = vk::raii::Queue { app->device, queue_family.present, 0 };
         app->graphics_queue = app->device.getQueue(queue_family.graphics, 0);
         app->present_queue = app->device.getQueue(queue_family.present, 0);
 }
@@ -875,7 +889,7 @@ inline void destroy_application(ApplicationSkeleton *app)
 {
         destroy_window(app->window);
 	destroy_swapchain(app->device, app->swapchain);
-	(*detail::get_vulkan_instance()).destroySurfaceKHR(app->surface);
+	detail::get_vulkan_instance().destroySurfaceKHR(app->surface);
 	app->device.destroy();
 }
 
@@ -1467,7 +1481,6 @@ struct GraphicsCreateInfo {
 	vk::RenderPass render_pass;
 };
 
-// TODO: remove as much raii as possible
 inline std::optional <vk::Pipeline> create(const vk::Device &device, const GraphicsCreateInfo &info)
 {
 	vk::PipelineShaderStageCreateInfo shader_stages[] = {

@@ -32,14 +32,14 @@ int main()
 	littlevk::config()->abort_on_validation_error = true;
 
 	// Load Vulkan physical device
-	auto predicate = [](const vk::raii::PhysicalDevice &dev) {
+	auto predicate = [](const vk::PhysicalDevice &dev) {
 		return littlevk::physical_device_able(dev,  {
 			VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 		});
 	};
 
         // TODO: pick_first predicate...
-	vk::raii::PhysicalDevice phdev = littlevk::pick_physical_device(predicate);
+	vk::PhysicalDevice phdev = littlevk::pick_physical_device(predicate);
 
 	littlevk::ApplicationSkeleton *app = new littlevk::ApplicationSkeleton;
         make_application(app, phdev, { 800, 600 }, "Hello Triangle");
