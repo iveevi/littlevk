@@ -69,7 +69,7 @@ namespace detail {
 struct Config {
 	std::vector <const char *> instance_extensions {};
 	bool enable_validation_layers = true;
-	bool abort_on_validation_error = false;
+	bool abort_on_validation_error = true;
 	bool enable_logging = true;
 };
 
@@ -668,6 +668,7 @@ struct FramebufferSetInfo {
 	Swapchain *swapchain;
 	vk::RenderPass render_pass;
 	vk::Extent2D extent;
+	vk::ImageView *depth_buffer = nullptr;
 	// TODO: depth buffer as well...
 	// vk::ImageView *depth_buffer_view = nullptr;
 };
@@ -677,7 +678,9 @@ inline FramebufferSetReturnProxy framebuffers(const vk::Device &device, const Fr
 	std::vector <vk::Framebuffer> framebuffers;
 
 	for (const vk::ImageView &view : info.swapchain->image_views) {
-		std::array <vk::ImageView, 1> fb_views { view };
+		std::vector <vk::ImageView> fb_views { view };
+		if (info.depth_buffer)
+			fb_views.emplace_back(*info.depth_buffer);
 
 		vk::FramebufferCreateInfo fb_info {
 			{}, info.render_pass, fb_views,
@@ -952,15 +955,13 @@ inline uint32_t find_memory_type(const vk::PhysicalDeviceMemoryProperties &mem_p
 	return type_index;
 }
 
-inline BufferReturnProxy buffer(const vk::Device &device, size_t size, const vk::PhysicalDeviceMemoryProperties &properties)
+inline BufferReturnProxy buffer(const vk::Device &device, size_t size, const vk::BufferUsageFlagBits &flags, const vk::PhysicalDeviceMemoryProperties &properties)
 {
 	// TODO: usage flags as well...
         Buffer buffer;
 
         vk::BufferCreateInfo buffer_info {
-                {}, size,
-                vk::BufferUsageFlagBits::eTransferSrc
-			| vk::BufferUsageFlagBits::eVertexBuffer,
+                {}, size, flags,
                 vk::SharingMode::eExclusive, 0, nullptr
         };
 
@@ -994,8 +995,6 @@ inline void upload(const vk::Device &device, const Buffer &buffer, const std::ve
 {
         size_t size = std::min(buffer.requirements.size, vec.size() * sizeof(T));
         void *mapped = device.mapMemory(buffer.memory, 0, size);
-        std::cout << "MAPPED TO ADDRESS: " << mapped << "\n";
-        std::cout << "Size of vec: " << vec.size() << ", transfer size: " << size << "\n";
         std::memcpy(mapped, vec.data(), size);
         device.unmapMemory(buffer.memory);
 
@@ -1023,14 +1022,26 @@ struct Image {
         vk::MemoryRequirements requirements;
 };
 
+// Return proxy for images
+inline void image_delete(const vk::Device &device, const Image &image)
+{
+        device.destroyImageView(image.view);
+        device.destroyImage(image.image);
+        device.freeMemory(image.memory);
+}
+
+using ImageReturnProxy = DeviceReturnProxy <Image, image_delete>;
+
+// Create image
 struct ImageCreateInfo {
         uint32_t width;
         uint32_t height;
         vk::Format format;
         vk::ImageUsageFlags usage;
+	vk::ImageAspectFlags aspect;
 };
 
-inline Image make_image(const vk::Device &device, const ImageCreateInfo &info, const vk::PhysicalDeviceMemoryProperties &properties)
+inline ImageReturnProxy image(const vk::Device &device, const ImageCreateInfo &info, const vk::PhysicalDeviceMemoryProperties &properties)
 {
         Image image;
 
@@ -1066,7 +1077,7 @@ inline Image make_image(const vk::Device &device, const ImageCreateInfo &info, c
                         vk::ComponentSwizzle::eIdentity
                 },
                 vk::ImageSubresourceRange {
-                        vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1
+                        info.aspect, 0, 1, 0, 1
                 }
         };
 
@@ -1211,13 +1222,6 @@ inline void transition_image_layout(const vk::CommandBuffer &cmd,
 
 	// Add the barrier
 	return cmd.pipelineBarrier(source_stage, destination_stage, {}, {}, {}, barrier);
-}
-
-inline void destroy_image(const vk::Device &device, const Image &image)
-{
-        device.destroyImageView(image.view);
-        device.destroyImage(image.image);
-        device.freeMemory(image.memory);
 }
 
 // Companion functions with automatic memory management
@@ -1617,6 +1621,13 @@ inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreat
 		{}, vk::SampleCountFlagBits::e1
 	};
 
+	vk::PipelineDepthStencilStateCreateInfo depth_stencil {
+		{}, true, true,
+		vk::CompareOp::eLess,
+		false, false,
+		{}, {}, 0.0f, 1.0f
+	};
+
 	vk::PipelineColorBlendAttachmentState color_blend_attachment {
 		false,
 		vk::BlendFactor::eOne, vk::BlendFactor::eZero, vk::BlendOp::eAdd,
@@ -1637,12 +1648,19 @@ inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreat
 
 	return device.createGraphicsPipeline(nullptr,
 		vk::GraphicsPipelineCreateInfo {
-			{}, shader_stages,
-			&vertex_input_info, &input_assembly,
-			nullptr, &viewport_state, &rasterizer,
-			&multisampling, nullptr, &color_blending,
-			nullptr, info.pipeline_layout, info.render_pass,
-			0, nullptr, -1
+			{},
+			shader_stages,
+			&vertex_input_info,
+			&input_assembly,
+			nullptr,
+			&viewport_state,
+			&rasterizer,
+			&multisampling,
+			&depth_stencil,
+			&color_blending,
+			nullptr,
+			info.pipeline_layout,
+			info.render_pass,
 		}
 	).value;
 }

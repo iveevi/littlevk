@@ -37,12 +37,14 @@ int main()
 
 	vk::PhysicalDevice phdev = littlevk::pick_physical_device(predicate);
 
+	// Create an application skeleton with the bare minimum
 	littlevk::ApplicationSkeleton *app = new littlevk::ApplicationSkeleton;
         make_application(app, phdev, { 800, 600 }, "Hello Triangle");
 
+	// Create a deallocator for automatic resource cleanup
 	auto deallocator = new littlevk::Deallocator { app->device };
 
-	// Create a dummy render pass
+	// Create a render pass
 	std::array <vk::AttachmentDescription, 1> attachments {
 		vk::AttachmentDescription {
 			{},
@@ -77,7 +79,7 @@ int main()
 		}
 	).unwrap(deallocator);
 
-	// Create a dummy framebuffer
+	// Create framebuffers from the swapchain
 	littlevk::FramebufferSetInfo fb_info;
 	fb_info.swapchain = &app->swapchain;
 	fb_info.render_pass = render_pass;
@@ -93,11 +95,9 @@ int main()
 		}
 	).unwrap(deallocator);
 
-	vk::CommandBufferAllocateInfo alloc_info {
+	auto command_buffers = app->device.allocateCommandBuffers({
 		command_pool, vk::CommandBufferLevel::ePrimary, 2
-	};
-
-	auto command_buffers = app->device.allocateCommandBuffers(alloc_info);
+	});
 
 	// Allocate triangle vertex buffer
 	struct Vertex {
@@ -131,7 +131,13 @@ int main()
 
 	vk::PhysicalDeviceMemoryProperties mem_props = phdev.getMemoryProperties();
 
-	littlevk::Buffer vertex_buffer = littlevk::buffer(app->device, sizeof(triangle), mem_props).unwrap(deallocator);
+	littlevk::Buffer vertex_buffer = littlevk::buffer(
+		app->device,
+		sizeof(triangle),
+		vk::BufferUsageFlagBits::eVertexBuffer,
+		mem_props
+	).unwrap(deallocator);
+
 	littlevk::upload(app->device, vertex_buffer, triangle);
 
 	// Compile shader modules
@@ -146,11 +152,12 @@ int main()
 	).unwrap(deallocator);
 
 	// Create a graphics pipeline
-	vk::PipelineLayoutCreateInfo pipeline_layout_info {
-		{}, 0, nullptr, 0, nullptr
-	};
-
-	vk::PipelineLayout pipeline_layout = littlevk::pipeline_layout(app->device, pipeline_layout_info).unwrap(deallocator);
+	vk::PipelineLayout pipeline_layout = littlevk::pipeline_layout(
+		app->device,
+		vk::PipelineLayoutCreateInfo {
+			{}, 0, nullptr, 0, nullptr
+		}
+	).unwrap(deallocator);
 
 	littlevk::pipeline::GraphicsCreateInfo pipeline_info;
 	pipeline_info.vertex_binding = Vertex::binding();
@@ -166,6 +173,7 @@ int main()
 	// Syncronization primitives
 	auto sync = littlevk::make_present_syncronization(app->device, 2).unwrap(deallocator);
 
+	// Render loop
         uint32_t frame = 0;
         while (true) {
                 glfwPollEvents();
@@ -176,7 +184,9 @@ int main()
                 op = littlevk::acquire_image(app->device, app->swapchain.swapchain, sync, frame);
 
 		// Start empty render pass
-		vk::ClearValue clear_value = vk::ClearColorValue { std::array <float, 4> { 0.0f, 0.0f, 0.0f, 1.0f } };
+		vk::ClearValue clear_value = vk::ClearColorValue {
+			std::array <float, 4> { 0.0f, 0.0f, 0.0f, 1.0f }
+		};
 
 		vk::RenderPassBeginInfo render_pass_info {
 			render_pass, framebuffers[op.index],
