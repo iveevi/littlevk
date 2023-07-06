@@ -4,43 +4,123 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+// Assimp for mesh loading
+#include <assimp/Importer.hpp>
+#include <assimp/scene.h>
+#include <assimp/postprocess.h>
+
+// Argument parsing
+#include "argparser.hpp"
+
+// Vertex data
+struct Vertex {
+	glm::vec3 postion;
+	glm::vec3 normal;
+
+	static constexpr vk::VertexInputBindingDescription binding() {
+		return vk::VertexInputBindingDescription {
+			0, sizeof(Vertex), vk::VertexInputRate::eVertex
+		};
+	}
+
+	static constexpr std::array <vk::VertexInputAttributeDescription, 2> attributes() {
+		return {
+			vk::VertexInputAttributeDescription {
+				0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, postion)
+			},
+			vk::VertexInputAttributeDescription {
+				1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal)
+			},
+		};
+	}
+};
+
+// Mesh and mesh loading
+struct Mesh {
+	std::vector <Vertex> vertices;
+	std::vector <uint32_t> indices;
+};
+
+Mesh load_mesh(const std::filesystem::path &);
+
 // Shader sources
 const std::string vertex_shader_source = R"(
 #version 450
 
 layout (location = 0) in vec3 position;
-layout (location = 1) in vec3 color;
+layout (location = 1) in vec3 normal;
 
 layout (push_constant) uniform PushConstants {
 	mat4 model;
 	mat4 view;
 	mat4 proj;
+
+	vec3 color;
+	vec3 light_direction;
 };
 
-layout (location = 0) out vec3 frag_color;
+layout (location = 0) out vec3 out_color;
+layout (location = 1) out vec3 out_normal;
+layout (location = 2) out vec3 out_light_direction;
 
 void main()
 {
 	gl_Position = proj * view * model * vec4(position, 1.0);
 	gl_Position.y = -gl_Position.y;
 	gl_Position.z = (gl_Position.z + gl_Position.w) / 2.0;
-	frag_color = color;
+
+	mat3 mv = mat3(view * model);
+
+	out_color = color;
+	out_normal = normalize(mv * normal);
+	out_light_direction = light_direction;
 }
 )";
 
 const std::string fragment_shader_source = R"(
 #version 450
 
-layout (location = 0) in vec3 frag_color;
+layout (location = 0) in vec3 in_color;
+layout (location = 1) in vec3 in_normal;
+layout (location = 2) in vec3 in_light_direction;
+
+// layout (location = 2) in vec2 frag_texcoord;
+// push constant for enabling textures
+
 layout (location = 0) out vec4 out_color;
 
 void main() {
-	out_color = vec4(frag_color, 1.0);
+	out_color = vec4(in_color, 1.0) * max(dot(in_normal, in_light_direction), 0.0);
 }
 )";
 
-int main()
+int main(int argc, char *argv[])
 {
+	// Process the arguments
+	ArgParser argparser { "example-mesh-viewer", 1, {
+		ArgParser::Option { "filename", "Input mesh" },
+	}};
+
+	argparser.parse(argc, argv);
+	
+	std::filesystem::path path;
+	path = argparser.get <std::string> (0);
+	path = std::filesystem::weakly_canonical(path);
+
+	// Load the mesh
+	Mesh mesh = load_mesh(path);
+
+	// Precompute some data for rendering
+	glm::vec3 center = glm::vec3(0.0f);
+	glm::vec3 min = glm::vec3(FLT_MAX);
+	glm::vec3 max = glm::vec3(-FLT_MAX);
+
+	for (const Vertex &vertex : mesh.vertices) {
+		center += vertex.postion/float(mesh.vertices.size());
+		min = glm::min(min, vertex.postion);
+		max = glm::max(max, vertex.postion);
+	}
+
 	// Load Vulkan physical device
 	auto predicate = [](const vk::PhysicalDevice &dev) {
 		return littlevk::physical_device_able(dev,  {
@@ -53,7 +133,7 @@ int main()
 
 	// Create an application skeleton with the bare minimum
 	littlevk::ApplicationSkeleton *app = new littlevk::ApplicationSkeleton;
-        make_application(app, phdev, { 800, 600 }, "Spinning Cube");
+        make_application(app, phdev, { 800, 600 }, "Mesh Viewer");
 
 	// Create a deallocator for automatic resource cleanup
 	auto deallocator = new littlevk::Deallocator { app->device };
@@ -143,94 +223,23 @@ int main()
 		command_pool, vk::CommandBufferLevel::ePrimary, 2
 	});
 
-	// Prepare cube vertex data
-	struct Vertex {
-		glm::vec3 postion;
-		glm::vec3 color;
-
-		static constexpr vk::VertexInputBindingDescription binding() {
-			return vk::VertexInputBindingDescription {
-				0, sizeof(Vertex), vk::VertexInputRate::eVertex
-			};
-		}
-
-		static constexpr std::array <vk::VertexInputAttributeDescription, 2> attributes() {
-			return std::array <vk::VertexInputAttributeDescription, 2> {
-				vk::VertexInputAttributeDescription {
-					0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, postion)
-				},
-				vk::VertexInputAttributeDescription {
-					1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color)
-				}
-			};
-		}
-	};
-
-	// Unit cube data
-	// std::array <Vertex, 24> cube_vertex_data {
-	std::vector <Vertex> cube_vertex_data {
-		// Front
-		Vertex { { -1.0f, -1.0f, -1.0f }, { 1.0f, 0.0f, 0.0f } },
-		Vertex { {  1.0f, -1.0f, -1.0f }, { 1.0f, 0.0f, 0.0f } },
-		Vertex { {  1.0f,  1.0f, -1.0f }, { 1.0f, 0.0f, 0.0f } },
-		Vertex { { -1.0f,  1.0f, -1.0f }, { 1.0f, 0.0f, 0.0f } },
-
-		// Back
-		Vertex { { -1.0f, -1.0f,  1.0f }, { 0.0f, 1.0f, 0.0f } },
-		Vertex { {  1.0f, -1.0f,  1.0f }, { 0.0f, 1.0f, 0.0f } },
-		Vertex { {  1.0f,  1.0f,  1.0f }, { 0.0f, 1.0f, 0.0f } },
-		Vertex { { -1.0f,  1.0f,  1.0f }, { 0.0f, 1.0f, 0.0f } },
-
-		// Left
-		Vertex { { -1.0f, -1.0f, -1.0f }, { 0.0f, 0.0f, 1.0f } },
-		Vertex { { -1.0f, -1.0f,  1.0f }, { 0.0f, 0.0f, 1.0f } },
-		Vertex { { -1.0f,  1.0f,  1.0f }, { 0.0f, 0.0f, 1.0f } },
-		Vertex { { -1.0f,  1.0f, -1.0f }, { 0.0f, 0.0f, 1.0f } },
-
-		// Right
-		Vertex { {  1.0f, -1.0f, -1.0f }, { 1.0f, 1.0f, 0.0f } },
-		Vertex { {  1.0f, -1.0f,  1.0f }, { 1.0f, 1.0f, 0.0f } },
-		Vertex { {  1.0f,  1.0f,  1.0f }, { 1.0f, 1.0f, 0.0f } },
-		Vertex { {  1.0f,  1.0f, -1.0f }, { 1.0f, 1.0f, 0.0f } },
-
-		// Top
-		Vertex { { -1.0f, -1.0f, -1.0f }, { 0.0f, 1.0f, 1.0f } },
-		Vertex { { -1.0f, -1.0f,  1.0f }, { 0.0f, 1.0f, 1.0f } },
-		Vertex { {  1.0f, -1.0f,  1.0f }, { 0.0f, 1.0f, 1.0f } },
-		Vertex { {  1.0f, -1.0f, -1.0f }, { 0.0f, 1.0f, 1.0f } },
-
-		// Bottom
-		Vertex { { -1.0f,  1.0f, -1.0f }, { 1.0f, 0.0f, 1.0f } },
-		Vertex { { -1.0f,  1.0f,  1.0f }, { 1.0f, 0.0f, 1.0f } },
-		Vertex { {  1.0f,  1.0f,  1.0f }, { 1.0f, 0.0f, 1.0f } },
-		Vertex { {  1.0f,  1.0f, -1.0f }, { 1.0f, 0.0f, 1.0f } }
-	};
-
-	std::vector <uint32_t> cube_index_data {
-		0, 1, 2,	2, 3, 0,	// Front
-		4, 6, 5,	6, 4, 7,	// Back
-		8, 10, 9,	10, 8, 11,	// Left
-		12, 13, 14,	14, 15, 12,	// Right
-		16, 17, 18,	18, 19, 16,	// Top
-		20, 22, 21,	22, 20, 23	// Bottom
-	};
-
+	// Allocate mesh buffers
 	littlevk::Buffer vertex_buffer = littlevk::buffer(
 		app->device,
-		cube_vertex_data.size() * sizeof(Vertex),
+		mesh.vertices.size() * sizeof(Vertex),
 		vk::BufferUsageFlagBits::eVertexBuffer,
 		mem_props
 	).unwrap(deallocator);
 
 	littlevk::Buffer index_buffer = littlevk::buffer(
 		app->device,
-		cube_index_data.size() * sizeof(uint32_t),
+		mesh.indices.size() * sizeof(uint32_t),
 		vk::BufferUsageFlagBits::eIndexBuffer,
 		mem_props
 	).unwrap(deallocator);
 
-	littlevk::upload(app->device, vertex_buffer, cube_vertex_data);
-	littlevk::upload(app->device, index_buffer, cube_index_data);
+	littlevk::upload(app->device, vertex_buffer, mesh.vertices);
+	littlevk::upload(app->device, index_buffer, mesh.indices);
 	
 	// Compile shader modules
 	vk::ShaderModule vertex_module = littlevk::shader::compile(
@@ -248,6 +257,9 @@ int main()
 		glm::mat4 model;
 		glm::mat4 view;
 		glm::mat4 proj;
+
+		alignas(16) glm::vec3 color;
+		alignas(16) glm::vec3 light_direction;
 	};
 
 	vk::PushConstantRange push_constant_range {
@@ -279,26 +291,73 @@ int main()
 
 	// Prepare camera and model matrices
 	glm::mat4 model = glm::mat4 { 1.0f };
-	
+	model = glm::translate(model, -center);
+
+	float radius = 1.0f;
 	glm::mat4 view = glm::lookAt(
-		glm::vec3 { 0.0f, 0.0f, 5.0f },
+		radius * glm::vec3 { 0.0f, 0.0f, glm::length(max - min) },
 		glm::vec3 { 0.0f, 0.0f, 0.0f },
 		glm::vec3 { 0.0f, 1.0f, 0.0f }
 	);
-	
+
 	glm::mat4 proj = glm::perspective(
 		glm::radians(45.0f),
 		app->window->extent.width / (float) app->window->extent.height,
-		0.1f, 10.0f
+		0.1f, 100 * glm::length(max - min)
 	);
+
+	// Pre render items
+	bool pause_rotate = false;
+	bool pause_resume_pressed = false;
+
+	float previous_time = 0.0f;
+	float current_time = 0.0f;
+
+	printf("Instructions:\n");
+	printf("[+/-]   Zoom in/out\n");
+	printf("[Space] Pause/resume rotation\n");
 
 	// Render loop
         uint32_t frame = 0;
         while (true) {
                 glfwPollEvents();
+
+		// Event handling
                 if (glfwWindowShouldClose(app->window->handle))
                         break;
 
+		// Zoom in/out
+		if (glfwGetKey(app->window->handle, GLFW_KEY_EQUAL) == GLFW_PRESS) {
+			radius += 0.01f;
+			view = glm::lookAt(
+				radius * glm::vec3 { 0.0f, 0.0f, glm::length(max - min) },
+				glm::vec3 { 0.0f, 0.0f, 0.0f },
+				glm::vec3 { 0.0f, 1.0f, 0.0f }
+			);
+		} else if (glfwGetKey(app->window->handle, GLFW_KEY_MINUS) == GLFW_PRESS) {
+			radius -= 0.01f;
+			view = glm::lookAt(
+				radius * glm::vec3 { 0.0f, 0.0f, glm::length(max - min) },
+				glm::vec3 { 0.0f, 0.0f, 0.0f },
+				glm::vec3 { 0.0f, 1.0f, 0.0f }
+			);
+		}
+
+		// Pause/resume rotation
+		if (glfwGetKey(app->window->handle, GLFW_KEY_SPACE) == GLFW_PRESS) {
+			if (!pause_resume_pressed) {
+				pause_rotate = !pause_rotate;
+				pause_resume_pressed = true;
+			}
+		} else {
+			pause_resume_pressed = false;
+		}
+
+		if (!pause_rotate)
+			current_time += glfwGetTime() - previous_time;
+		previous_time = glfwGetTime();
+
+		// Rendering
 		littlevk::SurfaceOperation op;
                 op = littlevk::acquire_image(app->device, app->swapchain.swapchain, sync, frame);
 
@@ -321,22 +380,28 @@ int main()
 		cmd.beginRenderPass(render_pass_info, vk::SubpassContents::eInline);
 		
 		// Render the triangle
-		PushConstants push_constants {
-			model, view, proj
-		};
+		PushConstants push_constants;
 
 		// Rotate the model matrix
 		push_constants.model = glm::rotate(
-			push_constants.model,
-			(float) glfwGetTime() * glm::radians(90.0f),
+			model,
+			current_time * glm::radians(90.0f),
 			glm::vec3 { 0.0f, 1.0f, 0.0f }
 		);
+
+		// push_constants.model = model;
+
+		push_constants.view = view;
+		push_constants.proj = proj;
+
+		push_constants.color = glm::vec3 { 1.0f, 0.0f, 0.0f };
+		push_constants.light_direction = glm::normalize(glm::vec3 { 0, 0, 1 });
 
 		cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
 		cmd.pushConstants <PushConstants> (pipeline_layout, vk::ShaderStageFlagBits::eVertex, 0, push_constants);
 		cmd.bindVertexBuffers(0, vertex_buffer.buffer, { 0 });
 		cmd.bindIndexBuffer(index_buffer.buffer, 0, vk::IndexType::eUint32);
-		cmd.drawIndexed(cube_index_data.size(), 1, 0, 0, 0);
+		cmd.drawIndexed(mesh.indices.size(), 1, 0, 0, 0);
 
 		cmd.endRenderPass();
 		cmd.end();
@@ -372,4 +437,89 @@ int main()
 	// TODO: address santizer to check leaks...
 
         return 0;
+}
+
+Mesh process_mesh(aiMesh *mesh, const aiScene *scene, const std::string &dir)
+{
+	// Mesh data
+	std::vector <Vertex> vertices;
+	std::vector <uint32_t> triangles;
+
+	// Process all the mesh's vertices
+	for (size_t i = 0; i < mesh->mNumVertices; i++) {
+		glm::vec3 v {
+			mesh->mVertices[i].x,
+			mesh->mVertices[i].y,
+			mesh->mVertices[i].z
+		};
+
+		glm::vec3 n {
+			mesh->mNormals[i].x,
+			mesh->mNormals[i].y,
+			mesh->mNormals[i].z
+		};
+
+		vertices.push_back({ v, n });
+	}
+
+	// Process all the mesh's triangles
+	std::stack <size_t> buffer;
+	for (size_t i = 0; i < mesh->mNumFaces; i++) {
+		aiFace face = mesh->mFaces[i];
+		for (size_t j = 0; j < face.mNumIndices; j++) {
+			buffer.push(face.mIndices[j]);
+			if (buffer.size() >= 3) {
+				size_t i0 = buffer.top(); buffer.pop();
+				size_t i1 = buffer.top(); buffer.pop();
+				size_t i2 = buffer.top(); buffer.pop();
+
+				triangles.push_back(i0);
+				triangles.push_back(i1);
+				triangles.push_back(i2);
+			}
+		}
+	}
+
+	return { vertices, triangles };
+}
+
+Mesh process_node(aiNode *node, const aiScene *scene, const std::string &dir)
+{
+	for (size_t i = 0; i < node->mNumMeshes; i++) {
+		aiMesh *mesh = scene->mMeshes[node->mMeshes[i]];
+                Mesh processed_mesh = process_mesh(mesh, scene, dir);
+		if (processed_mesh.indices.size() > 0)
+			return processed_mesh;
+	}
+
+	// Recusively process all the node's children
+	for (size_t i = 0; i < node->mNumChildren; i++) {
+		Mesh processed_mesh = process_node(node->mChildren[i], scene, dir);
+		if (processed_mesh.indices.size() > 0)
+			return processed_mesh;
+	}
+
+	return {};
+}
+
+Mesh load_mesh(const std::filesystem::path &path)
+{
+	Assimp::Importer importer;
+
+	// Read scene
+	const aiScene *scene = importer.ReadFile(
+		path, aiProcess_Triangulate
+			| aiProcess_GenNormals
+			| aiProcess_FlipUVs
+	);
+
+	// Check if the scene was loaded
+	if (!scene | scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE
+			|| !scene->mRootNode) {
+		fprintf(stderr, "Assimp error: \"%s\"\n", importer.GetErrorString());
+		return {};
+	}
+
+	// Process the scene (root node)
+	return process_node(scene->mRootNode, scene, path.string());
 }
