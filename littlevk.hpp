@@ -83,9 +83,11 @@ inline detail::Config *config()
 }
 
 // Automatic deallocation system
+using DeallocationQueue = std::queue <std::function <void (vk::Device)>>;
+
 struct Deallocator {
 	vk::Device device;
-	std::queue <std::function <void (vk::Device)>> device_deallocators;
+	DeallocationQueue device_deallocators;
 
 	Deallocator(vk::Device device) : device(device) {}
 	~Deallocator() {
@@ -97,7 +99,7 @@ struct Deallocator {
 };
 
 // Return proxy for device objects
-template <typename T, void deleter(const vk::Device &, const T &)>
+template <typename T, void destructor(const vk::Device &, const T &)>
 struct DeviceReturnProxy {
 	T value;
 	bool failed;
@@ -112,9 +114,61 @@ struct DeviceReturnProxy {
 		T value = this->value;
 		deallocator->device_deallocators.push(
 			[value](vk::Device device) {
-				deleter(device, value);
+				destructor(device, value);
 			}
 		);
+
+		return this->value;
+	}
+
+	T defer(DeallocationQueue &queue) {
+		if (this->failed)
+			return {};
+
+		T value = this->value;
+		queue.push(
+			[value](vk::Device device) {
+				destructor(device, value);
+			}
+		);
+
+		return this->value;
+	}
+};
+
+// Return proxy helper for structures composed of multiple device objects
+template <typename T>
+struct ComposedReturnProxy {
+	T value;
+	bool failed;
+	DeallocationQueue queue;
+
+	ComposedReturnProxy(T value, DeallocationQueue queue)
+			: value(value), failed(false), queue(queue) {}
+	ComposedReturnProxy(bool failed) : failed(failed) {}
+
+	T unwrap(Deallocator *deallocator) {
+		if (this->failed)
+			return {};
+
+		T value = this->value;
+		while (!this->queue.empty()) {
+			deallocator->device_deallocators.push(this->queue.front());
+			this->queue.pop();
+		}
+
+		return this->value;
+	}
+
+	T defer(DeallocationQueue &queue) {
+		if (this->failed)
+			return {};
+
+		T value = this->value;
+		while (!this->queue.empty()) {
+			queue.push(this->queue.front());
+			this->queue.pop();
+		}
 
 		return this->value;
 	}
@@ -649,19 +703,19 @@ inline void destroy_swapchain(const vk::Device &device, Swapchain &swapchain)
 }
 
 // Return proxy for framebuffer(s)
-static void framebuffer_delete(const vk::Device &device, const vk::Framebuffer &framebuffer)
+static void destroy_framebuffer(const vk::Device &device, const vk::Framebuffer &framebuffer)
 {
 	device.destroyFramebuffer(framebuffer);
 }
 
-static void framebuffer_set_delete(const vk::Device &device, const std::vector <vk::Framebuffer> &framebuffers)
+static void destroy_framebuffer_set(const vk::Device &device, const std::vector <vk::Framebuffer> &framebuffers)
 {
 	for (const vk::Framebuffer &fb : framebuffers)
 		device.destroyFramebuffer(fb);
 }
 
-using FramebufferReturnProxy = DeviceReturnProxy <vk::Framebuffer, framebuffer_delete>;
-using FramebufferSetReturnProxy = DeviceReturnProxy <std::vector <vk::Framebuffer>, framebuffer_set_delete>;
+using FramebufferReturnProxy = DeviceReturnProxy <vk::Framebuffer, destroy_framebuffer>;
+using FramebufferSetReturnProxy = DeviceReturnProxy <std::vector <vk::Framebuffer>, destroy_framebuffer_set>;
 
 // Generate framebuffer from swapchain, render pass and optional depth buffer
 struct FramebufferSetInfo {
@@ -883,6 +937,7 @@ inline vk::Device make_device(const vk::PhysicalDevice &phdev,
 	return make_device(phdev, indices.graphics, count, extensions);
 }
 
+// TODO: refactor to skeleton
 inline void make_application(ApplicationSkeleton *app,
                 const vk::PhysicalDevice &phdev,
                 const vk::Extent2D &extent,
@@ -924,13 +979,13 @@ struct Buffer {
 };
 
 // Return proxy for buffers
-static void buffer_delete(const vk::Device &device, const Buffer &buffer)
+static void destroy_buffer(const vk::Device &device, const Buffer &buffer)
 {
 	device.destroyBuffer(buffer.buffer);
 	device.freeMemory(buffer.memory);
 }
 
-using BufferReturnProxy = DeviceReturnProxy <Buffer, buffer_delete>;
+using BufferReturnProxy = DeviceReturnProxy <Buffer, destroy_buffer>;
 
 // Find memory type
 inline uint32_t find_memory_type(const vk::PhysicalDeviceMemoryProperties &mem_props,
@@ -1008,12 +1063,6 @@ inline void upload(const vk::Device &device, const Buffer &buffer, const std::ve
         }
 }
 
-inline void destroy_buffer(const vk::Device &device, const Buffer &buffer)
-{
-        device.destroyBuffer(buffer.buffer);
-        device.freeMemory(buffer.memory);
-}
-
 // Vulkan image wrapper
 struct Image {
         vk::Image image;
@@ -1023,14 +1072,14 @@ struct Image {
 };
 
 // Return proxy for images
-inline void image_delete(const vk::Device &device, const Image &image)
+inline void destroy_image(const vk::Device &device, const Image &image)
 {
         device.destroyImageView(image.view);
         device.destroyImage(image.image);
         device.freeMemory(image.memory);
 }
 
-using ImageReturnProxy = DeviceReturnProxy <Image, image_delete>;
+using ImageReturnProxy = DeviceReturnProxy <Image, destroy_image>;
 
 // Create image
 struct ImageCreateInfo {
@@ -1117,7 +1166,7 @@ inline void transition_image_layout(const vk::CommandBuffer &cmd,
 		src_access_mask = vk::AccessFlagBits::eShaderRead;
 		break;
 	default:
-		// KOBRA_ASSERT(false, "Unsupported old layout " + vk::to_string(old_layout));
+		log::error("transition layout", "Unsupported old layout %s", vk::to_string(old_layout).c_str());
 		break;
 	}
 
@@ -1145,7 +1194,7 @@ inline void transition_image_layout(const vk::CommandBuffer &cmd,
 		source_stage = vk::PipelineStageFlagBits::eFragmentShader;
 		break;
 	default:
-		// KOBRA_ASSERT(false, "Unsupported old layout " + vk::to_string(old_layout));
+		log::error("transition layout", "Unsupported old layout %s", vk::to_string(old_layout).c_str());
 		break;
 	}
 
@@ -1172,7 +1221,7 @@ inline void transition_image_layout(const vk::CommandBuffer &cmd,
 		dst_access_mask = vk::AccessFlagBits::eTransferWrite;
 		break;
 	default:
-		// KOBRA_ASSERT(false, "Unsupported new layout " + vk::to_string(new_layout));
+		log::error("transition layout", "Unsupported new layout %s", vk::to_string(new_layout).c_str());
 		break;
 	}
 
@@ -1193,7 +1242,7 @@ inline void transition_image_layout(const vk::CommandBuffer &cmd,
 	case vk::ImageLayout::eTransferSrcOptimal:
 		destination_stage = vk::PipelineStageFlagBits::eTransfer; break;
 	default:
-		// KOBRA_ASSERT(false, "Unsupported new layout " + vk::to_string(new_layout));
+		log::error("transition layout", "Unsupported new layout %s", vk::to_string(new_layout).c_str());
 		break;
 	}
 
@@ -1225,12 +1274,12 @@ inline void transition_image_layout(const vk::CommandBuffer &cmd,
 }
 
 // Companion functions with automatic memory management
-static void command_pool_delete(const vk::Device &device, const vk::CommandPool &pool)
+static void destroy_command_pool(const vk::Device &device, const vk::CommandPool &pool)
 {
 	device.destroyCommandPool(pool);
 }
 
-using CommandPoolReturnProxy = DeviceReturnProxy <vk::CommandPool, command_pool_delete>;
+using CommandPoolReturnProxy = DeviceReturnProxy <vk::CommandPool, destroy_command_pool>;
 
 inline CommandPoolReturnProxy command_pool(const vk::Device &device, const vk::CommandPoolCreateInfo &info)
 {
@@ -1241,12 +1290,12 @@ inline CommandPoolReturnProxy command_pool(const vk::Device &device, const vk::C
 	return std::move(pool);
 }
 
-static void pipeline_layout_delete(const vk::Device &device, const vk::PipelineLayout &layout)
+static void destroy_pipeline_layout(const vk::Device &device, const vk::PipelineLayout &layout)
 {
 	device.destroyPipelineLayout(layout);
 }
 
-using PipelineLayoutReturnProxy = DeviceReturnProxy <vk::PipelineLayout, pipeline_layout_delete>;
+using PipelineLayoutReturnProxy = DeviceReturnProxy <vk::PipelineLayout, destroy_pipeline_layout>;
 
 inline PipelineLayoutReturnProxy pipeline_layout(const vk::Device &device, const vk::PipelineLayoutCreateInfo &info)
 {
@@ -1257,12 +1306,12 @@ inline PipelineLayoutReturnProxy pipeline_layout(const vk::Device &device, const
 	return std::move(layout);
 }
 
-static void render_pass_delete(const vk::Device &device, const vk::RenderPass &render_pass)
+static void destroy_render_pass(const vk::Device &device, const vk::RenderPass &render_pass)
 {
 	device.destroyRenderPass(render_pass);
 }
 
-using RenderPassReturnProxy = DeviceReturnProxy <vk::RenderPass, render_pass_delete>;
+using RenderPassReturnProxy = DeviceReturnProxy <vk::RenderPass, destroy_render_pass>;
 
 inline RenderPassReturnProxy render_pass(const vk::Device &device, const vk::RenderPassCreateInfo &info)
 {
@@ -1487,12 +1536,12 @@ inline std::string fmt_lines(const std::string &str)
 }
 
 // Return proxy specialization for shader modules
-static void shader_delete(const vk::Device &device, const vk::ShaderModule &shader)
+static void destroy_shader_module(const vk::Device &device, const vk::ShaderModule &shader)
 {
 	device.destroyShaderModule(shader);
 }
 
-using ShaderModuleReturnProxy = DeviceReturnProxy <vk::ShaderModule, shader_delete>;
+using ShaderModuleReturnProxy = DeviceReturnProxy <vk::ShaderModule, destroy_shader_module>;
 
 // Compile shader
 inline ShaderModuleReturnProxy compile(const vk::Device &device,
@@ -1508,9 +1557,8 @@ inline ShaderModuleReturnProxy compile(const vk::Device &device,
 	_compile_out out = glsl_to_spriv(source, defines, includes, shader_type);
 	if (!out.log.empty()) {
 		// TODO: show the errornous line(s)
-		std::cerr << "Shader compilation failed:\n" << out.log
-			<< "\nSource:\n" << fmt_lines(out.source) << "\n";
-
+		log::error("shader", "Shader compilation failed:\n%s\nSource:\n%s",
+				out.log.c_str(), fmt_lines(out.source).c_str());
 		return true;
 	}
 
@@ -1537,9 +1585,8 @@ inline ShaderModuleReturnProxy compile(const vk::Device &device,
 	_compile_out out = glsl_to_spriv(source, defines, includes, shader_type);
 	if (!out.log.empty()) {
 		// TODO: show the errornous line(s)
-		std::cerr << "Shader compilation failed:\n" << out.log
-			<< "\nSource:\n" << fmt_lines(out.source) << "\n";
-
+		log::error("shader", "Shader compilation failed:\n%s\nSource:\n%s",
+				out.log.c_str(), fmt_lines(out.source).c_str());
 		return true;
 	}
 
@@ -1556,12 +1603,12 @@ inline ShaderModuleReturnProxy compile(const vk::Device &device,
 
 namespace pipeline {
 
-static void pipeline_delete(const vk::Device &device, const vk::Pipeline &pipeline)
+static void destroy_pipeline(const vk::Device &device, const vk::Pipeline &pipeline)
 {
 	device.destroyPipeline(pipeline);
 }
 
-using PipelineReturnProxy = DeviceReturnProxy <vk::Pipeline, pipeline_delete>;
+using PipelineReturnProxy = DeviceReturnProxy <vk::Pipeline, destroy_pipeline>;
 
 struct GraphicsCreateInfo {
 	vk::VertexInputBindingDescription vertex_binding;

@@ -12,8 +12,9 @@ find_package(glslang REQUIRED)
 add_executable(example-hello-triangle hello_triangle.cpp)
 add_executable(example-spinning-cube spinning_cube.cpp)
 add_executable(example-mesh-viewer mesh_viewer.cpp)
+add_executable(example-model-viewer model_viewer.cpp)
 
-include_directories(.. glm)
+include_directories(.. glm stb)
 
 set(LIBRARIES
 	Vulkan::Vulkan glfw SPIRV
@@ -21,14 +22,7 @@ set(LIBRARIES
 	glslang::glslang-default-resource-limits
 	assimp)
 
-target_link_libraries(example-hello-triangle PRIVATE
-	Vulkan::Vulkan glfw SPIRV
-	glslang::glslang
-	glslang::glslang-default-resource-limits)
-
-target_link_libraries(example-spinning-cube PRIVATE
-	Vulkan::Vulkan glfw SPIRV
-	glslang::glslang
-	glslang::glslang-default-resource-limits)
-
-target_link_libraries(example-mesh-viewer PRIVATE ${LIBRARIES})
+target_link_libraries(example-hello-triangle PRIVATE ${LIBRARIES})
+target_link_libraries(example-spinning-cube  PRIVATE ${LIBRARIES})
+target_link_libraries(example-mesh-viewer    PRIVATE ${LIBRARIES})
+target_link_libraries(example-model-viewer   PRIVATE ${LIBRARIES})

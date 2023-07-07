@@ -14,7 +14,7 @@
 
 // Vertex data
 struct Vertex {
-	glm::vec3 postion;
+	glm::vec3 position;
 	glm::vec3 normal;
 
 	static constexpr vk::VertexInputBindingDescription binding() {
@@ -26,7 +26,7 @@ struct Vertex {
 	static constexpr std::array <vk::VertexInputAttributeDescription, 2> attributes() {
 		return {
 			vk::VertexInputAttributeDescription {
-				0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, postion)
+				0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, position)
 			},
 			vk::VertexInputAttributeDescription {
 				1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal)
@@ -116,9 +116,9 @@ int main(int argc, char *argv[])
 	glm::vec3 max = glm::vec3(-FLT_MAX);
 
 	for (const Vertex &vertex : mesh.vertices) {
-		center += vertex.postion/float(mesh.vertices.size());
-		min = glm::min(min, vertex.postion);
-		max = glm::max(max, vertex.postion);
+		center += vertex.position/float(mesh.vertices.size());
+		min = glm::min(min, vertex.position);
+		max = glm::max(max, vertex.position);
 	}
 
 	// Load Vulkan physical device
