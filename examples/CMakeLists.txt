@@ -26,3 +26,5 @@ target_link_libraries(example-hello-triangle PRIVATE ${LIBRARIES})
 target_link_libraries(example-spinning-cube  PRIVATE ${LIBRARIES})
 target_link_libraries(example-mesh-viewer    PRIVATE ${LIBRARIES})
 target_link_libraries(example-model-viewer   PRIVATE ${LIBRARIES})
+
+add_definitions(-DEXAMPLE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")

@@ -1274,6 +1274,22 @@ inline void transition_image_layout(const vk::CommandBuffer &cmd,
 }
 
 // Companion functions with automatic memory management
+static void destroy_render_pass(const vk::Device &device, const vk::RenderPass &render_pass)
+{
+	device.destroyRenderPass(render_pass);
+}
+
+using RenderPassReturnProxy = DeviceReturnProxy <vk::RenderPass, destroy_render_pass>;
+
+inline RenderPassReturnProxy render_pass(const vk::Device &device, const vk::RenderPassCreateInfo &info)
+{
+	vk::RenderPass render_pass;
+	if (device.createRenderPass(&info, nullptr, &render_pass) != vk::Result::eSuccess)
+		return  true;
+
+	return std::move(render_pass);
+}
+
 static void destroy_command_pool(const vk::Device &device, const vk::CommandPool &pool)
 {
 	device.destroyCommandPool(pool);
@@ -1306,20 +1322,20 @@ inline PipelineLayoutReturnProxy pipeline_layout(const vk::Device &device, const
 	return std::move(layout);
 }
 
-static void destroy_render_pass(const vk::Device &device, const vk::RenderPass &render_pass)
+static void destroy_sampler(const vk::Device &device, const vk::Sampler &sampler)
 {
-	device.destroyRenderPass(render_pass);
+	device.destroySampler(sampler);
 }
 
-using RenderPassReturnProxy = DeviceReturnProxy <vk::RenderPass, destroy_render_pass>;
+using SamplerReturnProxy = DeviceReturnProxy <vk::Sampler, destroy_sampler>;
 
-inline RenderPassReturnProxy render_pass(const vk::Device &device, const vk::RenderPassCreateInfo &info)
+inline SamplerReturnProxy sampler(const vk::Device &device, const vk::SamplerCreateInfo &info)
 {
-	vk::RenderPass render_pass;
-	if (device.createRenderPass(&info, nullptr, &render_pass) != vk::Result::eSuccess)
+	vk::Sampler sampler;
+	if (device.createSampler(&info, nullptr, &sampler) != vk::Result::eSuccess)
 		return  true;
 
-	return std::move(render_pass);
+	return std::move(sampler);
 }
 
 namespace shader {
