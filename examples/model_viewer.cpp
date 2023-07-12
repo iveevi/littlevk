@@ -49,8 +49,6 @@ struct Vertex {
 	}
 };
 
-// TODO: put all the app data into a struct...
-
 // Mesh and mesh loading
 struct Mesh {
 	std::vector <Vertex> vertices;
@@ -115,78 +113,18 @@ struct {
 	bool right_dragging = false;
 } g_state;
 
-void mouse_callback(GLFWwindow* window, int button, int action, int mods)
-{
-	if (button == GLFW_MOUSE_BUTTON_LEFT) {
-		if (action == GLFW_PRESS)
-			g_state.left_dragging = true;
-		else if (action == GLFW_RELEASE)
-			g_state.left_dragging = false;
-	}
+void rotate_view(double, double);
+void mouse_callback(GLFWwindow *, int, int, int);
+void cursor_callback(GLFWwindow *, double, double);
+void scroll_callback(GLFWwindow *, double, double);
 
-	if (button == GLFW_MOUSE_BUTTON_RIGHT) {
-		if (action == GLFW_PRESS)
-			g_state.right_dragging = true;
-		else if (action == GLFW_RELEASE)
-			g_state.right_dragging = false;
-	}
-};
-
-void rotate_view(double dx, double dy)
-{
-	g_state.phi += dx * 0.01;
-	g_state.theta += dy * 0.01;
-
-	g_state.theta = glm::clamp(g_state.theta, -glm::half_pi <double> (), glm::half_pi <double> ());
-
-	glm::vec3 direction {
-		cos(g_state.phi) * cos(g_state.theta),
-		sin(g_state.theta),
-		sin(g_state.phi) * cos(g_state.theta)
-	};
-
-	float r = g_state.radius * g_state.radius_scale;
-	g_state.view = glm::lookAt(
-		g_state.center + r * direction,
-		g_state.center, glm::vec3(0.0, 1.0, 0.0)
-	);
-}
-
-void cursor_callback(GLFWwindow* window, double xpos, double ypos)
-{
-	double dx = xpos - g_state.last_x;
-	double dy = ypos - g_state.last_y;
-
-	if (g_state.left_dragging)
-		rotate_view(dx, dy);
-
-	if (g_state.right_dragging) {
-		glm::mat4 view = glm::inverse(g_state.view);
-		glm::vec3 right = view * glm::vec4(1.0, 0.0, 0.0, 0.0);
-		glm::vec3 up = view * glm::vec4(0.0, 1.0, 0.0, 0.0);
-
-		float r = g_state.radius * g_state.radius_scale;
-		g_state.center -= float(dx) * right * r * 0.001f;
-		g_state.center += float(dy) * up * r * 0.001f;
-		rotate_view(0.0, 0.0);
-	}
-
-	g_state.last_x = xpos;
-	g_state.last_y = ypos;
-}
-
-void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
-{
-	g_state.radius_scale -= yoffset * 0.1f;
-	g_state.radius_scale = glm::clamp(g_state.radius_scale, 0.1f, 10.0f);
-	rotate_view(0.0, 0.0);
-}
-
-struct App : littlevk::ApplicationSkeleton {
+struct App : littlevk::Skeleton {
 	vk::PhysicalDevice phdev;
 	vk::PhysicalDeviceMemoryProperties memory_properties;
 
 	littlevk::Deallocator *deallocator = nullptr;
+	
+	vk::CommandPool command_pool;
 
 	std::map <std::string, littlevk::Image> image_cache;
 };
@@ -197,18 +135,26 @@ App make_app()
 
 	// Load Vulkan physical device
 	auto predicate = [](const vk::PhysicalDevice &dev) {
-		return littlevk::physical_device_able(dev,  {
+		return littlevk::physical_device_able(dev, {
 			VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 		});
 	};
 
 	app.phdev = littlevk::pick_physical_device(predicate);
 	app.memory_properties = app.phdev.getMemoryProperties();
-
+	
 	// Create an application skeleton with the bare minimum
-        make_application(&app, app.phdev, { 800, 600 }, "Model Viewer");
-
+        app.skeletonize(app.phdev, { 800, 600 }, "Model Viewer");
+	
+	// Add the rest of the application
 	app.deallocator = new littlevk::Deallocator { app.device };
+
+	app.command_pool = littlevk::command_pool(app.device,
+		vk::CommandPoolCreateInfo {
+			vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+			littlevk::find_graphics_queue_family(app.phdev)
+		}
+	).unwrap(app.deallocator);
 
 	return app;
 }
@@ -232,8 +178,7 @@ std::optional <littlevk::Image> load_texture(App &app, const std::filesystem::pa
 		image = littlevk::image(app.device, {
 			(uint32_t) width, (uint32_t) height,
 			vk::Format::eR8G8B8A8Unorm,
-			vk::ImageUsageFlagBits::eSampled
-				| vk::ImageUsageFlagBits::eTransferDst,
+			vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
 			vk::ImageAspectFlagBits::eColor
 		}, app.memory_properties).unwrap(app.deallocator);
 
@@ -242,67 +187,21 @@ std::optional <littlevk::Image> load_texture(App &app, const std::filesystem::pa
 			app.device,
 			4 * width * height,
 			vk::BufferUsageFlagBits::eTransferSrc,
-				// | vk::BufferUsageFlagBits::eTransferDst,
 			app.memory_properties
 		).value;
 
 		littlevk::upload(app.device, staging_buffer, pixels);
 
-		// TODO: single time command buffer...
-		// TODO: only need a queue family, do we even need the phdev?
-		vk::CommandPool command_pool = littlevk::command_pool(app.device,
-			vk::CommandPoolCreateInfo {
-				vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
-				littlevk::find_graphics_queue_family(app.phdev)
+		// TODO: some state wise struct to simplify transitioning?
+		littlevk::submit_now(app.device, app.command_pool, app.graphics_queue,
+			[&](const vk::CommandBuffer &cmd) {
+				littlevk::transition(cmd, image, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+				littlevk::copy_buffer_to_image(cmd, image, staging_buffer, vk::ImageLayout::eTransferDstOptimal);
+				littlevk::transition(cmd, image, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
 			}
-		).value;
-
-		auto command_buffer = app.device.allocateCommandBuffers({
-			command_pool, vk::CommandBufferLevel::ePrimary, 1
-		}).front();
-
-		command_buffer.begin({
-			vk::CommandBufferUsageFlagBits::eOneTimeSubmit
-		});
-
-		littlevk::transition_image_layout(command_buffer, image,
-			vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
-
-		vk::BufferImageCopy region {
-			0, 0, 0,
-			vk::ImageSubresourceLayers {
-				vk::ImageAspectFlagBits::eColor, 0, 0, 1
-			},
-			vk::Offset3D { 0, 0, 0 },
-			vk::Extent3D {
-				(uint32_t) width, (uint32_t) height, 1
-			}
-		};
-
-		// TODO: buffer and image should have a * operator to directly access the vk::Buffer/vk::Image
-		command_buffer.copyBufferToImage(staging_buffer.buffer, image.image,
-			vk::ImageLayout::eTransferDstOptimal, region);
-
-		littlevk::transition_image_layout(command_buffer, image,
-			vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
-
-		command_buffer.end();
-
-		// Submit the command buffer
-		vk::Queue queue = app.device.getQueue(littlevk::find_graphics_queue_family(app.phdev), 0);
-
-		queue.submit({
-			vk::SubmitInfo {
-				0, nullptr, nullptr,
-				1, &command_buffer,
-				0, nullptr
-			}
-		}, nullptr);
-
-		queue.waitIdle();
+		);
 
 		// Free interim data
-		littlevk::destroy_command_pool(app.device, command_pool);
 		littlevk::destroy_buffer(app.device, staging_buffer);
 		stbi_image_free(pixels);
 
@@ -316,10 +215,13 @@ std::optional <littlevk::Image> load_texture(App &app, const std::filesystem::pa
 
 void destroy_app(App &app)
 {
+	// First wait for all operations to finish
+	app.device.waitIdle();
+
 	delete app.deallocator;
 
 	// Destroy the application skeleton
-	littlevk::destroy_application(&app);
+	app.destroy();
 }
 
 littlevk::ComposedReturnProxy <VulkanMesh> vulkan_mesh(App &app, const Mesh &mesh)
@@ -396,6 +298,7 @@ void link_descriptor_set(const vk::Device &device, const vk::DescriptorPool &poo
 	}).front();
 
 	// Binding 0: albedo texture
+	// TODO: littlevk utility for this?
 	vk::DescriptorImageInfo image_info {
 		vk_mesh.albedo_sampler,
 		vk_mesh.albedo_image.view,
@@ -428,16 +331,7 @@ int main(int argc, char *argv[])
 
 	// Load the mesh
 	Model model = load_model(path);
-
 	printf("Loaded model with %lu meshes\n", model.size());
-	// TODO: compute total vertex/triangle count...
-	// for (const auto &mesh : model) {
-	// 	printf("  mesh with %lu vertices and %lu indices\n",
-	// 		mesh.vertices.size(), mesh.indices.size());
-	//
-	// 	if (!mesh.albedo_path.empty())
-	// 		printf("    albedo texture: %s\n", mesh.albedo_path.c_str());
-	// }
 
 	// Precompute some data for rendering
 	glm::vec3 center = glm::vec3(0.0f);
@@ -459,39 +353,11 @@ int main(int argc, char *argv[])
 	// Initialize rendering backend
 	App app = make_app();
 
-	// Create a deallocator for automatic resource cleanup
-	auto deallocator = new littlevk::Deallocator { app.device };
-
 	// Create a render pass
 	std::array <vk::AttachmentDescription, 2> attachments {
-		// TODO: something like,
-		// littevk::default_color_attachment()
-		// .samplecount..(...)
-		// .loadop(...)
-		// ...
 		// TODO: same thing for samplers...
-		vk::AttachmentDescription {
-			{},
-			app.swapchain.format,
-			vk::SampleCountFlagBits::e1,
-			vk::AttachmentLoadOp::eClear,
-			vk::AttachmentStoreOp::eStore,
-			vk::AttachmentLoadOp::eDontCare,
-			vk::AttachmentStoreOp::eDontCare,
-			vk::ImageLayout::eUndefined,
-			vk::ImageLayout::ePresentSrcKHR,
-		},
-		vk::AttachmentDescription {
-			{},
-			vk::Format::eD32Sfloat,
-			vk::SampleCountFlagBits::e1,
-			vk::AttachmentLoadOp::eClear,
-			vk::AttachmentStoreOp::eDontCare,
-			vk::AttachmentLoadOp::eDontCare,
-			vk::AttachmentStoreOp::eDontCare,
-			vk::ImageLayout::eUndefined,
-			vk::ImageLayout::eDepthStencilAttachmentOptimal,
-		}
+		littlevk::default_color_attachment(app.swapchain.format),
+		littlevk::default_depth_attachment(),
 	};
 
 	std::array <vk::AttachmentReference, 1> color_attachments {
@@ -516,7 +382,7 @@ int main(int argc, char *argv[])
 		vk::RenderPassCreateInfo {
 			{}, attachments, subpass
 		}
-	).unwrap(deallocator);
+	).unwrap(app.deallocator);
 
 	// Create a depth buffer
 	littlevk::ImageCreateInfo depth_info {
@@ -531,7 +397,7 @@ int main(int argc, char *argv[])
 		app.device,
 		depth_info,
 		app.memory_properties
-	).unwrap(deallocator);
+	).unwrap(app.deallocator);
 
 	// Create framebuffers from the swapchain
 	littlevk::FramebufferSetInfo fb_info;
@@ -540,26 +406,17 @@ int main(int argc, char *argv[])
 	fb_info.extent = app.window->extent;
 	fb_info.depth_buffer = &depth_buffer.view;
 
-	auto framebuffers = littlevk::framebuffers(app.device, fb_info).unwrap(deallocator);
+	auto framebuffers = littlevk::framebuffers(app.device, fb_info).unwrap(app.deallocator);
 
 	// Allocate command buffers
-	vk::CommandPool command_pool = littlevk::command_pool(app.device,
-		vk::CommandPoolCreateInfo {
-			vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
-			littlevk::find_graphics_queue_family(app.phdev)
-		}
-	).unwrap(deallocator);
-
 	auto command_buffers = app.device.allocateCommandBuffers({
-		command_pool, vk::CommandBufferLevel::ePrimary, 2
+		app.command_pool, vk::CommandBufferLevel::ePrimary, 2
 	});
 
 	// Allocate mesh resources
 	// TODO: partition into meshes that have a texture and those that don't
-	// VulkanMesh vk_mesh = vulkan_mesh(phdev, app.device, mesh, mem_props).unwrap(deallocator);
 	std::vector <VulkanMesh> vk_meshes;
 	for (const auto &mesh : model) {
-		// VulkanMesh vk_mesh = vulkan_mesh(app.phdev, app.device, mesh, app.memory_properties).unwrap(deallocator);
 		VulkanMesh vk_mesh = vulkan_mesh(app, mesh).unwrap(app.deallocator);
 		vk_meshes.push_back(vk_mesh);
 	}
@@ -570,28 +427,28 @@ int main(int argc, char *argv[])
 	vk::ShaderModule vertex_module = littlevk::shader::compile(
 		app.device, read_file(EXAMPLES_DIRECTORY "/shaders/model_viewer.vert"),
 		vk::ShaderStageFlagBits::eVertex
-	).unwrap(deallocator);
+	).unwrap(app.deallocator);
 
 	vk::ShaderModule textured_fragment_module = littlevk::shader::compile(
 		app.device, read_file(EXAMPLES_DIRECTORY "/shaders/model_viewer_textured.frag"),
 		vk::ShaderStageFlagBits::eFragment
-	).unwrap(deallocator);
+	).unwrap(app.deallocator);
 
 	vk::ShaderModule default_fragment_module = littlevk::shader::compile(
 		app.device, read_file(EXAMPLES_DIRECTORY "/shaders/model_viewer_default.frag"),
 		vk::ShaderStageFlagBits::eFragment
-	).unwrap(deallocator);
+	).unwrap(app.deallocator);
 
 	// Descriptor pool allocation
 	vk::DescriptorPoolSize pool_size {
 		vk::DescriptorType::eCombinedImageSampler, (uint32_t) model.size()
 	};
 
-	vk::DescriptorPool descriptor_pool = app.device.createDescriptorPool(
-		vk::DescriptorPoolCreateInfo {
+	vk::DescriptorPool descriptor_pool = littlevk::descriptor_pool(
+		app.device, vk::DescriptorPoolCreateInfo {
 			{}, (uint32_t) model.size(), pool_size
 		}
-	);
+	).unwrap(app.deallocator);
 
 	// Descriptor set layout for the textured meshes
 	vk::DescriptorSetLayoutBinding render_binding {
@@ -599,11 +456,11 @@ int main(int argc, char *argv[])
 		1, vk::ShaderStageFlagBits::eFragment
 	};
 
-	vk::DescriptorSetLayout render_layout = app.device.createDescriptorSetLayout(
-		vk::DescriptorSetLayoutCreateInfo {
+	vk::DescriptorSetLayout render_layout = littlevk::descriptor_set_layout(
+		app.device, vk::DescriptorSetLayoutCreateInfo {
 			{}, render_binding
 		}
-	);
+	).unwrap(app.deallocator);
 
 	// Create the graphics pipelines
 	struct PushConstants {
@@ -629,7 +486,7 @@ int main(int argc, char *argv[])
 			{}, render_layout,
 			push_constant_range
 		}
-	).unwrap(deallocator);
+	).unwrap(app.deallocator);
 
 	vk::PipelineLayout default_pipeline_layout = littlevk::pipeline_layout(
 		app.device,
@@ -637,7 +494,7 @@ int main(int argc, char *argv[])
 			{}, {},
 			push_constant_range
 		}
-	).unwrap(deallocator);
+	).unwrap(app.deallocator);
 
 	littlevk::pipeline::GraphicsCreateInfo pipeline_info;
 	pipeline_info.vertex_binding = Vertex::binding();
@@ -649,15 +506,27 @@ int main(int argc, char *argv[])
 	pipeline_info.fragment_shader = textured_fragment_module;
 	pipeline_info.pipeline_layout = textured_pipeline_layout;
 	
-	vk::Pipeline textured_pipeline = littlevk::pipeline::compile(app.device, pipeline_info).unwrap(deallocator);
+	vk::Pipeline textured_pipeline = littlevk::pipeline::compile(app.device, pipeline_info).unwrap(app.deallocator);
 
 	pipeline_info.fragment_shader = default_fragment_module;
 	pipeline_info.pipeline_layout = default_pipeline_layout;
 
-	vk::Pipeline default_pipeline = littlevk::pipeline::compile(app.device, pipeline_info).unwrap(deallocator);
+	vk::Pipeline default_pipeline = littlevk::pipeline::compile(app.device, pipeline_info).unwrap(app.deallocator);
+
+	// Link descriptor sets
+	for (auto &vk_mesh : vk_meshes) {
+		if (!vk_mesh.has_texture)
+			continue;
+
+		link_descriptor_set(app.device,
+			descriptor_pool,
+			render_layout,
+			vk_mesh
+		);
+	}
 
 	// Syncronization primitives
-	auto sync = littlevk::make_present_syncronization(app.device, 2).unwrap(deallocator);
+	auto sync = littlevk::present_syncronization(app.device, 2).unwrap(app.deallocator);
 
 	// Prepare camera and model matrices
 	glm::mat4 proj = glm::perspective(
@@ -676,18 +545,6 @@ int main(int argc, char *argv[])
 
 	float previous_time = 0.0f;
 	float current_time = 0.0f;
-
-	// Link descriptor sets
-	for (auto &vk_mesh : vk_meshes) {
-		if (!vk_mesh.has_texture)
-			continue;
-
-		link_descriptor_set(app.device,
-			descriptor_pool,
-			render_layout,
-			vk_mesh
-		);
-	}
 
 	// Mouse actions
 	glfwSetMouseButtonCallback(app.window->handle, mouse_callback);
@@ -787,16 +644,76 @@ int main(int argc, char *argv[])
 		// TODO: resize function
         }
 
-	// Finish all pending operations
-	app.device.waitIdle();
-	app.device.destroyDescriptorSetLayout(render_layout);
-	app.device.destroyDescriptorPool(descriptor_pool);
-
-	// Free resources using automatic deallocator
-	delete deallocator;
 	destroy_app(app);
-        
 	return 0;
+}
+
+// Mouse callbacks
+void rotate_view(double dx, double dy)
+{
+	g_state.phi += dx * 0.01;
+	g_state.theta += dy * 0.01;
+
+	g_state.theta = glm::clamp(g_state.theta, -glm::half_pi <double> (), glm::half_pi <double> ());
+
+	glm::vec3 direction {
+		cos(g_state.phi) * cos(g_state.theta),
+		sin(g_state.theta),
+		sin(g_state.phi) * cos(g_state.theta)
+	};
+
+	float r = g_state.radius * g_state.radius_scale;
+	g_state.view = glm::lookAt(
+		g_state.center + r * direction,
+		g_state.center, glm::vec3(0.0, 1.0, 0.0)
+	);
+}
+
+void mouse_callback(GLFWwindow *window, int button, int action, int mods)
+{
+	if (button == GLFW_MOUSE_BUTTON_LEFT) {
+		if (action == GLFW_PRESS)
+			g_state.left_dragging = true;
+		else if (action == GLFW_RELEASE)
+			g_state.left_dragging = false;
+	}
+
+	if (button == GLFW_MOUSE_BUTTON_RIGHT) {
+		if (action == GLFW_PRESS)
+			g_state.right_dragging = true;
+		else if (action == GLFW_RELEASE)
+			g_state.right_dragging = false;
+	}
+};
+
+void cursor_callback(GLFWwindow *window, double xpos, double ypos)
+{
+	double dx = xpos - g_state.last_x;
+	double dy = ypos - g_state.last_y;
+
+	if (g_state.left_dragging)
+		rotate_view(dx, dy);
+
+	if (g_state.right_dragging) {
+		glm::mat4 view = glm::inverse(g_state.view);
+		glm::vec3 right = view * glm::vec4(1.0, 0.0, 0.0, 0.0);
+		glm::vec3 up = view * glm::vec4(0.0, 1.0, 0.0, 0.0);
+
+		float r = g_state.radius * g_state.radius_scale;
+		g_state.center -= float(dx) * right * r * 0.001f;
+		g_state.center += float(dy) * up * r * 0.001f;
+		rotate_view(0.0, 0.0);
+	}
+
+	g_state.last_x = xpos;
+	g_state.last_y = ypos;
+}
+
+void scroll_callback(GLFWwindow *window, double xoffset, double yoffset)
+{
+	g_state.radius_scale -= yoffset * 0.1f;
+	g_state.radius_scale = glm::clamp(g_state.radius_scale, 0.1f, 10.0f);
+	rotate_view(0.0, 0.0);
 }
 
 // TODO: common mesh.hpp as a util.hpp?

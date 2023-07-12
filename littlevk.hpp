@@ -517,6 +517,7 @@ struct Swapchain {
 	vk::SwapchainKHR swapchain;
 	std::vector <vk::Image> images;
 	std::vector <vk::ImageView> image_views;
+	vk::SwapchainCreateInfoKHR info;
 };
 
 // Pick a surface format
@@ -588,7 +589,7 @@ inline vk::PresentModeKHR pick_present_mode(const vk::PhysicalDevice &phdev, con
 
 // Swapchain allocation and destruction
 // TODO: info struct...
-inline Swapchain make_swapchain(const vk::PhysicalDevice &phdev,
+inline Swapchain swapchain(const vk::PhysicalDevice &phdev,
                 const vk::Device &device,
                 const vk::SurfaceKHR &surface,
                 const vk::Extent2D &extent,
@@ -640,7 +641,7 @@ inline Swapchain make_swapchain(const vk::PhysicalDevice &phdev,
         vk::PresentModeKHR present_mode = pick_present_mode(phdev, surface);
 
         // Creation info
-        vk::SwapchainCreateInfoKHR create_info {
+        swapchain.info = vk::SwapchainCreateInfoKHR {
                 {},
                 surface,
                 capabilities.minImageCount,
@@ -661,13 +662,13 @@ inline Swapchain make_swapchain(const vk::PhysicalDevice &phdev,
 
         // In case graphics and present queues are different
         if (indices.graphics != indices.present) {
-                create_info.imageSharingMode = vk::SharingMode::eConcurrent;
-                create_info.queueFamilyIndexCount = 2;
-                create_info.pQueueFamilyIndices = &indices.graphics;
+                swapchain.info.imageSharingMode = vk::SharingMode::eConcurrent;
+                swapchain.info.queueFamilyIndexCount = 2;
+                swapchain.info.pQueueFamilyIndices = &indices.graphics;
         }
 
         // Create the swapchain
-        swapchain.swapchain = device.createSwapchainKHR(create_info);
+        swapchain.swapchain = device.createSwapchainKHR(swapchain.info);
 
         // Get the swapchain images
 	swapchain.images = device.getSwapchainImagesKHR(swapchain.swapchain);
@@ -691,6 +692,44 @@ inline Swapchain make_swapchain(const vk::PhysicalDevice &phdev,
 
 	return swapchain;
 }
+
+inline void resize(const vk::Device &device,
+		Swapchain &swapchain,
+		const vk::Extent2D &extent)
+{
+	// First free the old swapchain resources
+	for (const vk::ImageView &view : swapchain.image_views)
+		device.destroyImageView(view);
+
+	device.destroySwapchainKHR(swapchain.swapchain);
+
+	// We simply need to modify the swapchain info
+	// and rebuild it
+	swapchain.info.imageExtent = extent;
+
+	swapchain.swapchain = device.createSwapchainKHR(swapchain.info);
+	swapchain.images = device.getSwapchainImagesKHR(swapchain.swapchain);
+
+	// Recreate image views
+	vk::ImageViewCreateInfo create_view_info {
+		{}, {},
+		vk::ImageViewType::e2D,
+		swapchain.format,
+		{},
+		vk::ImageSubresourceRange(
+			vk::ImageAspectFlagBits::eColor,
+			0, 1, 0, 1
+		)
+	};
+
+	swapchain.image_views.clear();
+	for (size_t i = 0; i < swapchain.images.size(); i++) {
+		create_view_info.image = swapchain.images[i];
+		swapchain.image_views.emplace_back(device.createImageView(create_view_info));
+	}
+}
+
+// TODO: and a handle_resize function
 
 inline void destroy_swapchain(const vk::Device &device, Swapchain &swapchain)
 {
@@ -747,6 +786,100 @@ inline FramebufferSetReturnProxy framebuffers(const vk::Device &device, const Fr
 	return framebuffers;
 }
 
+// Vulkan description/create info wrappers
+struct AttachmentDescription {
+	vk::Format              m_format;
+	vk::SampleCountFlagBits m_samples;
+	vk::AttachmentLoadOp    m_load_op;
+	vk::AttachmentStoreOp   m_store_op;
+	vk::AttachmentLoadOp    m_stencil_load_op;
+	vk::AttachmentStoreOp   m_stencil_store_op;
+	vk::ImageLayout         m_initial_layout;
+	vk::ImageLayout         m_final_layout;
+
+	operator vk::AttachmentDescription() const {
+		return vk::AttachmentDescription(
+			{},
+			m_format,
+			m_samples,
+			m_load_op,
+			m_store_op,
+			m_stencil_load_op,
+			m_stencil_store_op,
+			m_initial_layout,
+			m_final_layout
+		);
+	}
+
+	AttachmentDescription &format(vk::Format format) {
+		this->m_format = format;
+		return *this;
+	}
+
+	AttachmentDescription &samples(vk::SampleCountFlagBits samples) {
+		this->m_samples = samples;
+		return *this;
+	}
+
+	AttachmentDescription &load_op(vk::AttachmentLoadOp load_op) {
+		this->m_load_op = load_op;
+		return *this;
+	}
+
+	AttachmentDescription &store_op(vk::AttachmentStoreOp store_op) {
+		this->m_store_op = store_op;
+		return *this;
+	}
+
+	AttachmentDescription &stencil_load_op(vk::AttachmentLoadOp stencil_load_op) {
+		this->m_stencil_load_op = stencil_load_op;
+		return *this;
+	}
+
+	AttachmentDescription &stencil_store_op(vk::AttachmentStoreOp stencil_store_op) {
+		this->m_stencil_store_op = stencil_store_op;
+		return *this;
+	}
+
+	AttachmentDescription &initial_layout(vk::ImageLayout initial_layout) {
+		this->m_initial_layout = initial_layout;
+		return *this;
+	}
+
+	AttachmentDescription &final_layout(vk::ImageLayout final_layout) {
+		this->m_final_layout = final_layout;
+		return *this;
+	}
+};
+
+// Preset attachment descriptions
+inline AttachmentDescription default_color_attachment(const vk::Format &swapchain_format)
+{
+	return AttachmentDescription()
+		.format(swapchain_format)
+		.samples(vk::SampleCountFlagBits::e1)
+		.load_op(vk::AttachmentLoadOp::eClear)
+		.store_op(vk::AttachmentStoreOp::eStore)
+		.stencil_load_op(vk::AttachmentLoadOp::eDontCare)
+		.stencil_store_op(vk::AttachmentStoreOp::eDontCare)
+		.initial_layout(vk::ImageLayout::eUndefined)
+		.final_layout(vk::ImageLayout::ePresentSrcKHR);
+}
+
+inline AttachmentDescription default_depth_attachment()
+{
+	return AttachmentDescription()
+		.format(vk::Format::eD32Sfloat)
+		.samples(vk::SampleCountFlagBits::e1)
+		.load_op(vk::AttachmentLoadOp::eClear)
+		.store_op(vk::AttachmentStoreOp::eDontCare)
+		.stencil_load_op(vk::AttachmentLoadOp::eDontCare)
+		.stencil_store_op(vk::AttachmentStoreOp::eDontCare)
+		.initial_layout(vk::ImageLayout::eUndefined)
+		.final_layout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
+}
+
+// Syncronization primitive for presentation
 struct PresentSyncronization {
         std::vector <vk::Semaphore> image_available;
         std::vector <vk::Semaphore> render_finished;
@@ -768,7 +901,7 @@ inline void destroy_present_syncronization(const vk::Device &device, const Prese
 // Return proxy for present syncronization
 using PresentSyncronizationReturnProxy = DeviceReturnProxy <PresentSyncronization, destroy_present_syncronization>;
 
-inline PresentSyncronizationReturnProxy make_present_syncronization(const vk::Device &device, uint32_t frames_in_flight)
+inline PresentSyncronizationReturnProxy present_syncronization(const vk::Device &device, uint32_t frames_in_flight)
 {
 	PresentSyncronization sync;
 
@@ -810,10 +943,10 @@ inline SurfaceOperation acquire_image(const vk::Device &device,
         auto [result, image_index] = device.acquireNextImageKHR(swapchain, UINT64_MAX, sync.image_available[frame], nullptr);
 
         if (result == vk::Result::eErrorOutOfDateKHR) {
-                std::cerr << "Swapchain out of date" << std::endl;
+		log::warning("acquire_image", "Swapchain out of date\n");
                 return { SurfaceOperation::eResize, 0 };
         } else if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR) {
-                std::cerr << "Failed to acquire swapchain image" << std::endl;
+		log::error("acquire_image", "Failed to acquire swapchain image\n");
                 return { SurfaceOperation::eFailed, 0 };
         }
 
@@ -838,7 +971,7 @@ inline SurfaceOperation present_image(const vk::Queue &queue,
 		// TODO: check return value here
                 queue.presentKHR(present_info);
         } catch (vk::OutOfDateKHRError &e) {
-                std::cerr << "Swapchain out of date" << std::endl;
+		log::warning("present_image", "Swapchain out of date\n");
                 return { SurfaceOperation::eResize, 0 };
         }
 
@@ -884,7 +1017,7 @@ inline vk::PhysicalDevice pick_physical_device(const std::function <bool (const 
 	throw std::runtime_error("[Vulkan] No physical device found");
 }
 
-struct ApplicationSkeleton {
+struct Skeleton {
         vk::Device device;
         vk::PhysicalDevice phdev = nullptr;
         vk::SurfaceKHR surface;
@@ -894,10 +1027,16 @@ struct ApplicationSkeleton {
 
         Swapchain swapchain;
         Window *window = nullptr;
+
+	bool skeletonize(const vk::PhysicalDevice &,
+                const vk::Extent2D &,
+                const std::string &);
+
+	bool destroy();
 };
 
 // Create logical device on an arbitrary queue
-inline vk::Device make_device(const vk::PhysicalDevice &phdev,
+inline vk::Device device(const vk::PhysicalDevice &phdev,
 		const uint32_t queue_family,
 		const uint32_t queue_count,
 		const std::vector <const char *> &extensions)
@@ -928,18 +1067,17 @@ inline vk::Device make_device(const vk::PhysicalDevice &phdev,
 }
 
 // Create a logical device
-inline vk::Device make_device(const vk::PhysicalDevice &phdev,
+inline vk::Device device(const vk::PhysicalDevice &phdev,
 		const QueueFamilyIndices &indices,
 		const std::vector <const char *> &extensions)
 {
 	auto families = phdev.getQueueFamilyProperties();
 	uint32_t count = families[indices.graphics].queueCount;
-	return make_device(phdev, indices.graphics, count, extensions);
+	return device(phdev, indices.graphics, count, extensions);
 }
 
 // TODO: refactor to skeleton
-inline void make_application(ApplicationSkeleton *app,
-                const vk::PhysicalDevice &phdev,
+inline bool Skeleton::skeletonize(const vk::PhysicalDevice &phdev_,
                 const vk::Extent2D &extent,
                 const std::string &title)
 {
@@ -948,27 +1086,30 @@ inline void make_application(ApplicationSkeleton *app,
                 VK_KHR_SWAPCHAIN_EXTENSION_NAME
         };
 
-        app->phdev = phdev;
-        app->window = make_window(extent, title);
-        app->surface = make_surface(*app->window);
+        phdev = phdev_;
+        window = make_window(extent, title);
+        surface = make_surface(*window);
 
-        QueueFamilyIndices queue_family = find_queue_families(phdev, app->surface);
-        app->device = make_device(phdev, queue_family, device_extensions);
-	app->swapchain = make_swapchain(
-                phdev, app->device, app->surface,
-                app->window->extent, queue_family
+        QueueFamilyIndices queue_family = find_queue_families(phdev, surface);
+        device = littlevk::device(phdev, queue_family, device_extensions);
+	swapchain = littlevk::swapchain(
+                phdev, device, surface,
+                window->extent, queue_family
 	);
 
-        app->graphics_queue = app->device.getQueue(queue_family.graphics, 0);
-        app->present_queue = app->device.getQueue(queue_family.present, 0);
+        graphics_queue = device.getQueue(queue_family.graphics, 0);
+        present_queue = device.getQueue(queue_family.present, 0);
+
+	return true;
 }
 
-inline void destroy_application(ApplicationSkeleton *app)
+inline bool Skeleton::destroy()
 {
-        destroy_window(app->window);
-	destroy_swapchain(app->device, app->swapchain);
-	detail::get_vulkan_instance().destroySurfaceKHR(app->surface);
-	app->device.destroy();
+        destroy_window(window);
+	destroy_swapchain(device, swapchain);
+	detail::get_vulkan_instance().destroySurfaceKHR(surface);
+	device.destroy();
+	return true;
 }
 
 // Vulkan buffer wrapper
@@ -976,6 +1117,10 @@ struct Buffer {
         vk::Buffer buffer;
         vk::DeviceMemory memory;
         vk::MemoryRequirements requirements;
+
+	vk::Buffer operator*() const {
+		return buffer;
+	}
 };
 
 // Return proxy for buffers
@@ -1069,6 +1214,11 @@ struct Image {
         vk::ImageView view;
         vk::DeviceMemory memory;
         vk::MemoryRequirements requirements;
+	vk::Extent2D extent;
+
+	vk::Image operator*() const {
+		return image;
+	}
 };
 
 // Return proxy for images
@@ -1131,11 +1281,12 @@ inline ImageReturnProxy image(const vk::Device &device, const ImageCreateInfo &i
         };
 
         image.view = device.createImageView(view_info);
+	image.extent = vk::Extent2D { info.width, info.height };
 
         return image;
 }
 
-inline void transition_image_layout(const vk::CommandBuffer &cmd,
+inline void transition(const vk::CommandBuffer &cmd,
 		const Image &image,
 		const vk::ImageLayout old_layout,
 		const vk::ImageLayout new_layout)
@@ -1266,11 +1417,55 @@ inline void transition_image_layout(const vk::CommandBuffer &cmd,
 		src_access_mask, dst_access_mask,
 		old_layout, new_layout,
 		VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-		image.image, image_subresource_range
+		*image, image_subresource_range
 	};
 
 	// Add the barrier
 	return cmd.pipelineBarrier(source_stage, destination_stage, {}, {}, {}, barrier);
+}
+
+// Copying buffer to image
+static void copy_buffer_to_image(const vk::CommandBuffer &cmd,
+		const Image &image, const Buffer &buffer,
+		const vk::ImageLayout &layout)
+{
+	vk::BufferImageCopy region {
+		0, 0, 0,
+		vk::ImageSubresourceLayers {
+			vk::ImageAspectFlagBits::eColor,
+			0, 0, 1
+		},
+		vk::Offset3D { 0, 0, 0 },
+		vk::Extent3D { image.extent.width, image.extent.height, 1 }
+	};
+
+	cmd.copyBufferToImage(*buffer, *image, layout, region);
+}
+
+// Single-time command buffer submission
+inline void submit_now(const vk::Device &device, const vk::CommandPool &pool, const vk::Queue &queue,
+		const std::function<void (const vk::CommandBuffer &)> &function)
+{
+	vk::CommandBuffer cmd = device.allocateCommandBuffers(
+		vk::CommandBufferAllocateInfo {
+			pool, vk::CommandBufferLevel::ePrimary, 1
+		}
+	).front();
+
+	cmd.begin({ vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
+	function(cmd);
+	cmd.end();
+
+	vk::SubmitInfo submit_info {
+		0, nullptr, nullptr,
+		1, &cmd,
+		0, nullptr
+	};
+
+	queue.submit(1, &submit_info, nullptr);
+	queue.waitIdle();
+
+	device.freeCommandBuffers(pool, 1, &cmd);
 }
 
 // Companion functions with automatic memory management
@@ -1304,6 +1499,38 @@ inline CommandPoolReturnProxy command_pool(const vk::Device &device, const vk::C
 		return  true;
 
 	return std::move(pool);
+}
+
+static void destroy_descriptor_pool(const vk::Device &device, const vk::DescriptorPool &pool)
+{
+	device.destroyDescriptorPool(pool);
+}
+
+using DescriptorPoolReturnProxy = DeviceReturnProxy <vk::DescriptorPool, destroy_descriptor_pool>;
+
+inline DescriptorPoolReturnProxy descriptor_pool(const vk::Device &device, const vk::DescriptorPoolCreateInfo &info)
+{
+	vk::DescriptorPool pool;
+	if (device.createDescriptorPool(&info, nullptr, &pool) != vk::Result::eSuccess)
+		return  true;
+
+	return std::move(pool);
+}
+
+static void destroy_descriptor_set_layout(const vk::Device &device, const vk::DescriptorSetLayout &layout)
+{
+	device.destroyDescriptorSetLayout(layout);
+}
+
+using DescriptorSetLayoutReturnProxy = DeviceReturnProxy <vk::DescriptorSetLayout, destroy_descriptor_set_layout>;
+
+inline DescriptorSetLayoutReturnProxy descriptor_set_layout(const vk::Device &device, const vk::DescriptorSetLayoutCreateInfo &info)
+{
+	vk::DescriptorSetLayout layout;
+	if (device.createDescriptorSetLayout(&info, nullptr, &layout) != vk::Result::eSuccess)
+		return  true;
+
+	return std::move(layout);
 }
 
 static void destroy_pipeline_layout(const vk::Device &device, const vk::PipelineLayout &layout)

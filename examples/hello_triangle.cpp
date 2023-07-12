@@ -38,17 +38,17 @@ int main()
 	vk::PhysicalDevice phdev = littlevk::pick_physical_device(predicate);
 
 	// Create an application skeleton with the bare minimum
-	littlevk::ApplicationSkeleton *app = new littlevk::ApplicationSkeleton;
-        make_application(app, phdev, { 800, 600 }, "Hello Triangle");
+	littlevk::Skeleton app;
+	app.skeletonize(phdev, { 800, 600 }, "Hello Triangle");
 
 	// Create a deallocator for automatic resource cleanup
-	auto deallocator = new littlevk::Deallocator { app->device };
+	auto deallocator = new littlevk::Deallocator { app.device };
 
 	// Create a render pass
 	std::array <vk::AttachmentDescription, 1> attachments {
 		vk::AttachmentDescription {
 			{},
-			app->swapchain.format,
+			app.swapchain.format,
 			vk::SampleCountFlagBits::e1,
 			vk::AttachmentLoadOp::eClear,
 			vk::AttachmentStoreOp::eStore,
@@ -73,7 +73,7 @@ int main()
 	};
 
 	vk::RenderPass render_pass = littlevk::render_pass(
-		app->device,
+		app.device,
 		vk::RenderPassCreateInfo {
 			{}, attachments, subpass
 		}
@@ -81,21 +81,21 @@ int main()
 
 	// Create framebuffers from the swapchain
 	littlevk::FramebufferSetInfo fb_info;
-	fb_info.swapchain = &app->swapchain;
+	fb_info.swapchain = &app.swapchain;
 	fb_info.render_pass = render_pass;
-	fb_info.extent = app->window->extent;
+	fb_info.extent = app.window->extent;
 
-	auto framebuffers = littlevk::framebuffers(app->device, fb_info).unwrap(deallocator);
+	auto framebuffers = littlevk::framebuffers(app.device, fb_info).unwrap(deallocator);
 
 	// Allocate command buffers
-	vk::CommandPool command_pool = littlevk::command_pool(app->device,
+	vk::CommandPool command_pool = littlevk::command_pool(app.device,
 		vk::CommandPoolCreateInfo {
 			vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
 			littlevk::find_graphics_queue_family(phdev)
 		}
 	).unwrap(deallocator);
 
-	auto command_buffers = app->device.allocateCommandBuffers({
+	auto command_buffers = app.device.allocateCommandBuffers({
 		command_pool, vk::CommandBufferLevel::ePrimary, 2
 	});
 
@@ -132,28 +132,28 @@ int main()
 	vk::PhysicalDeviceMemoryProperties mem_props = phdev.getMemoryProperties();
 
 	littlevk::Buffer vertex_buffer = littlevk::buffer(
-		app->device,
+		app.device,
 		sizeof(triangle),
 		vk::BufferUsageFlagBits::eVertexBuffer,
 		mem_props
 	).unwrap(deallocator);
 
-	littlevk::upload(app->device, vertex_buffer, triangle);
+	littlevk::upload(app.device, vertex_buffer, triangle);
 
 	// Compile shader modules
 	vk::ShaderModule vertex_module = littlevk::shader::compile(
-		app->device, vertex_shader_source,
+		app.device, vertex_shader_source,
 		vk::ShaderStageFlagBits::eVertex
 	).unwrap(deallocator);
 
 	vk::ShaderModule fragment_module = littlevk::shader::compile(
-		app->device, fragment_shader_source,
+		app.device, fragment_shader_source,
 		vk::ShaderStageFlagBits::eFragment
 	).unwrap(deallocator);
 
 	// Create a graphics pipeline
 	vk::PipelineLayout pipeline_layout = littlevk::pipeline_layout(
-		app->device,
+		app.device,
 		vk::PipelineLayoutCreateInfo {
 			{}, 0, nullptr, 0, nullptr
 		}
@@ -164,24 +164,59 @@ int main()
 	pipeline_info.vertex_attributes = Vertex::attributes();
 	pipeline_info.vertex_shader = vertex_module;
 	pipeline_info.fragment_shader = fragment_module;
-	pipeline_info.extent = app->window->extent;
+	pipeline_info.extent = app.window->extent;
 	pipeline_info.pipeline_layout = pipeline_layout;
 	pipeline_info.render_pass = render_pass;
 
-	vk::Pipeline pipeline = littlevk::pipeline::compile(app->device, pipeline_info).unwrap(deallocator);
+	vk::Pipeline pipeline = littlevk::pipeline::compile(app.device, pipeline_info).unwrap(deallocator);
 
 	// Syncronization primitives
-	auto sync = littlevk::make_present_syncronization(app->device, 2).unwrap(deallocator);
+	auto sync = littlevk::present_syncronization(app.device, 2).unwrap(deallocator);
+
+	auto resize = [&]() {
+		int new_width = 0;
+		int new_height = 0;
+		
+		int current_width = 0;
+		int current_height = 0;
+		
+		do {
+			glfwGetFramebufferSize(app.window->handle, &current_width, &current_height);
+			while (current_width == 0 || current_height == 0) {
+				glfwWaitEvents();
+				glfwGetFramebufferSize(app.window->handle, &current_width, &current_height);
+			}
+
+			vk::SurfaceCapabilitiesKHR caps = app.phdev.getSurfaceCapabilitiesKHR(app.surface);
+			new_width = std::clamp(new_width, int(caps.minImageExtent.width), int(caps.maxImageExtent.width));
+			new_height = std::clamp(new_height, int(caps.minImageExtent.height), int(caps.maxImageExtent.height));
+
+			app.device.waitIdle();
+			littlevk::resize(app.device, app.swapchain, { uint32_t(new_width), uint32_t(new_height) });
+
+			glfwGetFramebufferSize(app.window->handle, &new_width, &new_height);
+		} while (new_width != current_width || new_height != current_height);
+	
+		printf("Resized to %dx%d\n", new_width, new_height);
+		app.window->extent = vk::Extent2D { uint32_t(new_width), uint32_t(new_height) };
+		fb_info.extent = app.window->extent;
+		framebuffers = littlevk::framebuffers(app.device, fb_info).unwrap(deallocator);
+	};
 
 	// Render loop
         uint32_t frame = 0;
         while (true) {
                 glfwPollEvents();
-                if (glfwWindowShouldClose(app->window->handle))
+                if (glfwWindowShouldClose(app.window->handle))
                         break;
 
 		littlevk::SurfaceOperation op;
-                op = littlevk::acquire_image(app->device, app->swapchain.swapchain, sync, frame);
+                op = littlevk::acquire_image(app.device, app.swapchain.swapchain, sync, frame);
+		if (op.status == littlevk::SurfaceOperation::eResize) {
+			printf("resize after acquire\n");
+			resize();
+			continue;
+		}
 
 		// Start empty render pass
 		vk::ClearValue clear_value = vk::ClearColorValue {
@@ -190,7 +225,7 @@ int main()
 
 		vk::RenderPassBeginInfo render_pass_info {
 			render_pass, framebuffers[op.index],
-			vk::Rect2D { {}, app->window->extent },
+			vk::Rect2D { {}, app.window->extent },
 			1, &clear_value
 		};
 
@@ -215,25 +250,29 @@ int main()
 			1, &sync.render_finished[frame]
 		};
 
-		app->graphics_queue.submit(submit_info, sync.in_flight[frame]);
+		app.graphics_queue.submit(submit_info, sync.in_flight[frame]);
 
-                op = littlevk::present_image(app->present_queue, app->swapchain.swapchain, sync, op.index);
+                op = littlevk::present_image(app.present_queue, app.swapchain.swapchain, sync, op.index);
 		frame = 1 - frame;
+	
+		printf("Frame %d\n", frame);
+		if (op.status == littlevk::SurfaceOperation::eResize) {
+			printf("resize after present\n");
+			resize();
+		}
 
 		// TODO: resize function
         }
 
 	// Finish all pending operations
-	app->device.waitIdle();
+	app.device.waitIdle();
 
 	// Free resources using automatic deallocator
 	delete deallocator;
 
         // Delete application
-	littlevk::destroy_application(app);
-        delete app;
+	app.destroy();
 
 	// TODO: address santizer to check leaks...
-
         return 0;
 }
