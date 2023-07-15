@@ -325,25 +325,49 @@ inline const std::vector <const char *> &get_required_extensions()
 	return extensions;
 }
 
+// Instance singleton
+static struct {
+	bool initialized = false;
+	vk::Instance instance;
+} global_instance;
+
+// Debug messenger singleton
+static struct debug_messenger_singleton {
+	bool initialized = false;
+	vk::DebugUtilsMessengerEXT messenger;
+
+	~debug_messenger_singleton()
+	{
+		if (initialized) {
+			if (!global_instance.initialized) {
+				log::error("fatal", "debug messenger singleton destroyed without valid instance singleton\n");
+				return;
+			}
+
+			global_instance.instance.destroyDebugUtilsMessengerEXT(messenger);
+		}
+	}
+} global_messenger;
 
 // Get (or create) the singleton instance
 inline const vk::Instance &get_vulkan_instance()
 {
-	static bool initialized = false;
-	static vk::Instance instance;
+	// static bool initialized = false;
+	// static vk::Instance instance;
 
 	// TODO: from config...
 	static vk::ApplicationInfo app_info {
-		"Kobra",
+		"LittleVk",
 		VK_MAKE_VERSION(1, 0, 0),
-		"Kobra",
+		"LittelVk",
 		VK_MAKE_VERSION(1, 0, 0),
 		VK_API_VERSION_1_3
 	};
 
 	// Skip if already initialized
-	if (initialized)
-		return instance;
+	if (global_instance.initialized)
+		return global_instance.instance;
+		// return instance;
 
 	// Make sure GLFW is initialized
 	initialize_glfw();
@@ -373,7 +397,10 @@ inline const vk::Instance &get_vulkan_instance()
 		}
 	}
 
-	instance = vk::createInstance(instance_info);
+	// instance = vk::createInstance(instance_info);
+	// Instance::one() = vk::createInstance(instance_info);
+	global_instance.instance = vk::createInstance(instance_info);
+
 	if (config()->enable_validation_layers) {
 		// Create debug messenger
 		static constexpr vk::DebugUtilsMessengerCreateInfoEXT debug_messenger_info {
@@ -389,22 +416,43 @@ inline const vk::Instance &get_vulkan_instance()
 		};
 
 		// TODO: deallocation queue...
-		struct DebugMessengerWrapper {
-			vk::Instance instance;
-			vk::DebugUtilsMessengerEXT debug_messenger;
+		// struct DebugMessengerWrapper {
+		// 	vk::Instance instance;
+		// 	vk::DebugUtilsMessengerEXT debug_messenger;
+		//
+		// 	~DebugMessengerWrapper()
+		// 	{
+		// 		instance.destroyDebugUtilsMessengerEXT(debug_messenger);
+		// 	}
+		// };
 
-			~DebugMessengerWrapper()
-			{
-				instance.destroyDebugUtilsMessengerEXT(debug_messenger);
-			}
-		};
+		// auto debug_messenger = instance.createDebugUtilsMessengerEXT(debug_messenger_info);
+		// static DebugMessengerWrapper wrapper { instance, debug_messenger };
+		// auto debug_messenger = global_instance.instance.createDebugUtilsMessengerEXT(debug_messenger_info);
+		// static DebugMessengerWrapper wrapper { global_instance.instance, debug_messenger };
 
-		auto debug_messenger = instance.createDebugUtilsMessengerEXT(debug_messenger_info);
-		static DebugMessengerWrapper wrapper { instance, debug_messenger };
+		global_messenger.messenger = global_instance.instance.createDebugUtilsMessengerEXT(debug_messenger_info);
+		global_messenger.initialized = true;
 	}
 
-	initialized = true;
-	return instance;
+	global_instance.initialized = true;
+	// return instance;
+	return global_instance.instance;
+}
+
+// Explicit shutdown routine, worst case for users...
+inline void shutdown_now()
+{
+	// Kill the messenger, then the instance
+	if (global_messenger.initialized) {
+		global_instance.instance.destroyDebugUtilsMessengerEXT(global_messenger.messenger);
+		global_messenger.initialized = false;
+	}
+
+	if (global_instance.initialized) {
+		global_instance.instance.destroy();
+		global_instance.initialized = false;
+	}
 }
 
 } // namespace detail
@@ -937,7 +985,7 @@ inline SurfaceOperation acquire_image(const vk::Device &device,
                 uint32_t frame)
 {
         // Wait for previous frame to finish
-        device.waitForFences(sync.in_flight[frame], VK_TRUE, UINT64_MAX);
+        (void) device.waitForFences(sync.in_flight[frame], VK_TRUE, UINT64_MAX);
 
         // Acquire image
         auto [result, image_index] = device.acquireNextImageKHR(swapchain, UINT64_MAX, sync.image_available[frame], nullptr);
@@ -969,7 +1017,7 @@ inline SurfaceOperation present_image(const vk::Queue &queue,
 
         try {
 		// TODO: check return value here
-                queue.presentKHR(present_info);
+                (void) queue.presentKHR(present_info);
         } catch (vk::OutOfDateKHRError &e) {
 		log::warning("present_image", "Swapchain out of date\n");
                 return { SurfaceOperation::eResize, 0 };
@@ -1208,6 +1256,24 @@ inline void upload(const vk::Device &device, const Buffer &buffer, const std::ve
         }
 }
 
+inline void download(const vk::Device &device, const Buffer &buffer, void *data)
+{
+	void *mapped = device.mapMemory(buffer.memory, 0, buffer.requirements.size);
+	std::memcpy(data, mapped, buffer.requirements.size);
+	device.unmapMemory(buffer.memory);
+}
+
+template <typename T>
+inline void download(const vk::Device &device, const Buffer &buffer, std::vector <T> &vec)
+{
+	size_t size = std::min(buffer.requirements.size, vec.size() * sizeof(T));
+	void *mapped = device.mapMemory(buffer.memory, 0, size);
+	std::memcpy(vec.data(), mapped, size);
+	device.unmapMemory(buffer.memory);
+
+	// TODO: warn
+}
+
 // Vulkan image wrapper
 struct Image {
         vk::Image image;
@@ -1442,6 +1508,22 @@ static void copy_buffer_to_image(const vk::CommandBuffer &cmd,
 	cmd.copyBufferToImage(*buffer, *image, layout, region);
 }
 
+// Construct framebuffer from image
+inline FramebufferReturnProxy framebuffer(const vk::Device &device, const vk::RenderPass &rp, const littlevk::Image &image)
+{
+	std::array <vk::ImageView, 1> attachments = {
+		image.view
+	};
+
+	vk::FramebufferCreateInfo framebuffer_info {
+		{}, rp,
+		(uint32_t) attachments.size(), attachments.data(),
+		image.extent.width, image.extent.height, 1
+	};
+
+	return device.createFramebuffer(framebuffer_info);
+}
+
 // Single-time command buffer submission
 inline void submit_now(const vk::Device &device, const vk::CommandPool &pool, const vk::Queue &queue,
 		const std::function<void (const vk::CommandBuffer &)> &function)
@@ -1462,7 +1544,7 @@ inline void submit_now(const vk::Device &device, const vk::CommandPool &pool, co
 		0, nullptr
 	};
 
-	queue.submit(1, &submit_info, nullptr);
+	(void) queue.submit(1, &submit_info, nullptr);
 	queue.waitIdle();
 
 	device.freeCommandBuffers(pool, 1, &cmd);
@@ -1862,6 +1944,9 @@ struct GraphicsCreateInfo {
 
 	bool dynamic_viewport = false;
 	vk::Extent2D extent;
+	
+	vk::PolygonMode fill_mode = vk::PolygonMode::eFill;
+	vk::CullModeFlags cull_mode = vk::CullModeFlagBits::eBack;
 
 	vk::PipelineLayout pipeline_layout;
 	vk::RenderPass render_pass;
@@ -1901,8 +1986,8 @@ inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreat
 
 	vk::PipelineRasterizationStateCreateInfo rasterizer {
 		{}, false, false,
-		vk::PolygonMode::eFill,
-		vk::CullModeFlagBits::eBack,
+		info.fill_mode,
+		info.cull_mode,
 		vk::FrontFace::eClockwise,
 		false, 0.0f, 0.0f, 0.0f, 1.0f
 	};
