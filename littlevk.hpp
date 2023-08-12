@@ -1080,7 +1080,7 @@ struct Skeleton {
                 const vk::Extent2D &,
                 const std::string &);
 
-	bool destroy();
+	virtual bool destroy();
 };
 
 // Create logical device on an arbitrary queue
@@ -1230,6 +1230,34 @@ inline BufferReturnProxy buffer(const vk::Device &device, size_t size, const vk:
         return buffer;
 }
 
+using FilledBufferReturnProxy = ComposedReturnProxy <Buffer>;
+
+template <typename T>
+inline FilledBufferReturnProxy buffer(const vk::Device &device, const std::vector <T> &vec, const vk::BufferUsageFlagBits &flags, const vk::PhysicalDeviceMemoryProperties &properties)
+{
+	DeallocationQueue dq;
+	Buffer buffer = littlevk::buffer(device,
+		vec.size() * sizeof(T),
+		flags, properties
+	).defer(dq);
+
+	upload(device, buffer, vec);
+	return { buffer, dq };
+}
+
+template <typename T, size_t N>
+inline FilledBufferReturnProxy buffer(const vk::Device &device, const std::array <T, N> &vec, const vk::BufferUsageFlagBits &flags, const vk::PhysicalDeviceMemoryProperties &properties)
+{
+	DeallocationQueue dq;
+	Buffer buffer = littlevk::buffer(device,
+		vec.size() * sizeof(T),
+		flags, properties
+	).defer(dq);
+
+	upload(device, buffer, vec);
+	return { buffer, dq };
+}
+
 // TODO: overload with size
 inline void upload(const vk::Device &device, const Buffer &buffer, const void *data)
 {
@@ -1254,6 +1282,23 @@ inline void upload(const vk::Device &device, const Buffer &buffer, const std::ve
 			<< size << "/" << vec.size() * sizeof(T)
 			<< " bytes were transferred\n";
         }
+}
+
+template <typename T, size_t N>
+inline void upload(const vk::Device &device, const Buffer &buffer, const std::array <T, N> &arr)
+{
+	size_t size = std::min(buffer.requirements.size, arr.size() * sizeof(T));
+	void *mapped = device.mapMemory(buffer.memory, 0, size);
+	std::memcpy(mapped, arr.data(), size);
+	device.unmapMemory(buffer.memory);
+
+	// Warn if fewer elements were transferred
+	if (size < N * sizeof(T)) {
+		std::cout << "Fewer elements were transferred than"
+			<< " may have been expected: "
+			<< size << "/" << arr.size() * sizeof(T)
+			<< " bytes were transferred\n";
+	}
 }
 
 inline void download(const vk::Device &device, const Buffer &buffer, void *data)
@@ -1506,6 +1551,23 @@ static void copy_buffer_to_image(const vk::CommandBuffer &cmd,
 	};
 
 	cmd.copyBufferToImage(*buffer, *image, layout, region);
+}
+
+// Binding resources to descriptor sets
+inline void bind(const vk::Device &device, const vk::DescriptorSet &dset, const Image &img, const vk::Sampler &sampler)
+{
+	vk::DescriptorImageInfo image_info {
+		sampler, img.view,
+		vk::ImageLayout::eShaderReadOnlyOptimal
+	};
+
+	vk::WriteDescriptorSet write {
+		dset, 0, 0, 1,
+		vk::DescriptorType::eCombinedImageSampler,
+		&image_info, nullptr, nullptr
+	};
+
+	device.updateDescriptorSets({ write }, {});
 }
 
 // Construct framebuffer from image
