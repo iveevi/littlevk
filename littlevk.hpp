@@ -2004,11 +2004,13 @@ struct GraphicsCreateInfo {
 	vk::ShaderModule vertex_shader;
 	vk::ShaderModule fragment_shader;
 
-	bool dynamic_viewport = false;
 	vk::Extent2D extent;
 	
 	vk::PolygonMode fill_mode = vk::PolygonMode::eFill;
 	vk::CullModeFlags cull_mode = vk::CullModeFlagBits::eBack;
+	
+	bool dynamic_viewport = false;
+	bool alpha_blend = false;
 
 	vk::PipelineLayout pipeline_layout;
 	vk::RenderPass render_pass;
@@ -2065,14 +2067,26 @@ inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreat
 		{}, {}, 0.0f, 1.0f
 	};
 
-	vk::PipelineColorBlendAttachmentState color_blend_attachment {
-		false,
-		vk::BlendFactor::eOne, vk::BlendFactor::eZero, vk::BlendOp::eAdd,
-		vk::BlendFactor::eOne, vk::BlendFactor::eZero, vk::BlendOp::eAdd,
-		vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-		vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA
-	};
+	vk::PipelineColorBlendAttachmentState color_blend_attachment = {};
 
+	if (info.alpha_blend) {
+		color_blend_attachment = {
+			true,
+			vk::BlendFactor::eSrcAlpha, vk::BlendFactor::eOneMinusSrcAlpha, vk::BlendOp::eAdd,
+			vk::BlendFactor::eOne, vk::BlendFactor::eZero, vk::BlendOp::eAdd,
+			vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+			vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA
+		};
+	} else {
+		color_blend_attachment = {
+			false,
+			vk::BlendFactor::eOne, vk::BlendFactor::eZero, vk::BlendOp::eAdd,
+			vk::BlendFactor::eOne, vk::BlendFactor::eZero, vk::BlendOp::eAdd,
+			vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+			vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA
+		};
+	}
+	
 	vk::PipelineColorBlendStateCreateInfo color_blending {
 		{}, false, vk::LogicOp::eCopy,
 		1, &color_blend_attachment,
