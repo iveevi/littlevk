@@ -61,6 +61,53 @@ vkDestroyDebugUtilsMessengerEXT(VkInstance instance,
 	__vkDestroyDebugUtilsMessengerEXT(instance, debug_messenger, allocator);
 }
 
+// Logging
+namespace microlog {
+
+// Colors and formatting
+// TODO: windows support
+struct colors {
+	static constexpr const char *error = "\033[31;1m";
+	static constexpr const char *info = "\033[34;1m";
+	static constexpr const char *reset = "\033[0m";
+	static constexpr const char *warning = "\033[33;1m";
+};
+
+inline void error(const char *header, const char *format, ...)
+{
+	printf("%s[littlevk::error]%s (%s) ",
+		colors::error, colors::reset, header);
+
+	va_list args;
+	va_start(args, format);
+	vprintf(format, args);
+	va_end(args);
+}
+
+inline void warning(const char *header, const char *format, ...)
+{
+	printf("%s[littlevk::warning]%s (%s) ",
+		colors::warning, colors::reset, header);
+
+	va_list args;
+	va_start(args, format);
+	vprintf(format, args);
+	va_end(args);
+}
+
+inline void info(const char *header, const char *format, ...)
+{
+	printf("%s[littlevk::info]%s (%s) ",
+		colors::info, colors::reset, header);
+
+	va_list args;
+	va_start(args, format);
+	vprintf(format, args);
+	va_end(args);
+}
+
+}
+
 namespace littlevk {
 
 namespace detail {
@@ -174,64 +221,6 @@ struct ComposedReturnProxy {
 	}
 };
 
-namespace log {
-
-// Colors and formatting
-// TODO: windows support
-struct colors {
-	static constexpr const char *error = "\033[31;1m";
-	static constexpr const char *info = "\033[34;1m";
-	static constexpr const char *reset = "\033[0m";
-	static constexpr const char *warning = "\033[33;1m";
-};
-
-inline void error(const char *header, const char *format, ...)
-{
-	// Always skip if logging is disabled
-	if (!config()->enable_logging)
-		return;
-
-	printf("%s[littlevk::error]%s (%s) ",
-		colors::error, colors::reset, header);
-
-	va_list args;
-	va_start(args, format);
-	vprintf(format, args);
-	va_end(args);
-}
-
-inline void warning(const char *header, const char *format, ...)
-{
-	// Always skip if logging is disabled
-	if (!config()->enable_logging)
-		return;
-
-	printf("%s[littlevk::warning]%s (%s) ",
-		colors::warning, colors::reset, header);
-
-	va_list args;
-	va_start(args, format);
-	vprintf(format, args);
-	va_end(args);
-}
-
-inline void info(const char *header, const char *format, ...)
-{
-	// Always skip if logging is disabled
-	if (!config()->enable_logging)
-		return;
-
-	printf("%s[littlevk::info]%s (%s) ",
-		colors::info, colors::reset, header);
-
-	va_list args;
-	va_start(args, format);
-	vprintf(format, args);
-	va_end(args);
-}
-
-} // namespace logging
-
 namespace validation {
 
 // Create debug messenger
@@ -269,13 +258,13 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_logger
 {
 	// Errors
 	if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-		log::error("validation", "%s\n", pCallbackData->pMessage);
+		microlog::error("validation", "%s\n", pCallbackData->pMessage);
 		if (config()->abort_on_validation_error)
 			abort();
 	} else if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-		log::warning("validation", "%s\n", pCallbackData->pMessage);
+		microlog::warning("validation", "%s\n", pCallbackData->pMessage);
 	} else {
-		log::info("validation", "%s\n", pCallbackData->pMessage);
+		microlog::info("validation", "%s\n", pCallbackData->pMessage);
 	}
 
 	return VK_FALSE;
@@ -340,7 +329,7 @@ static struct debug_messenger_singleton {
 	{
 		if (initialized) {
 			if (!global_instance.initialized) {
-				log::error("fatal", "debug messenger singleton destroyed without valid instance singleton\n");
+				microlog::error("fatal", "debug messenger singleton destroyed without valid instance singleton\n");
 				return;
 			}
 
@@ -991,10 +980,10 @@ inline SurfaceOperation acquire_image(const vk::Device &device,
         auto [result, image_index] = device.acquireNextImageKHR(swapchain, UINT64_MAX, sync.image_available[frame], nullptr);
 
         if (result == vk::Result::eErrorOutOfDateKHR) {
-		log::warning("acquire_image", "Swapchain out of date\n");
+		microlog::warning("acquire_image", "Swapchain out of date\n");
                 return { SurfaceOperation::eResize, 0 };
         } else if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR) {
-		log::error("acquire_image", "Failed to acquire swapchain image\n");
+		microlog::error("acquire_image", "Failed to acquire swapchain image\n");
                 return { SurfaceOperation::eFailed, 0 };
         }
 
@@ -1019,7 +1008,7 @@ inline SurfaceOperation present_image(const vk::Queue &queue,
 		// TODO: check return value here
                 (void) queue.presentKHR(present_info);
         } catch (vk::OutOfDateKHRError &e) {
-		log::warning("present_image", "Swapchain out of date\n");
+		microlog::warning("present_image", "Swapchain out of date\n");
                 return { SurfaceOperation::eResize, 0 };
         }
 
@@ -1428,7 +1417,7 @@ inline void transition(const vk::CommandBuffer &cmd,
 		src_access_mask = vk::AccessFlagBits::eShaderRead;
 		break;
 	default:
-		log::error("transition layout", "Unsupported old layout %s", vk::to_string(old_layout).c_str());
+		microlog::error("transition layout", "Unsupported old layout %s", vk::to_string(old_layout).c_str());
 		break;
 	}
 
@@ -1456,7 +1445,7 @@ inline void transition(const vk::CommandBuffer &cmd,
 		source_stage = vk::PipelineStageFlagBits::eFragmentShader;
 		break;
 	default:
-		log::error("transition layout", "Unsupported old layout %s", vk::to_string(old_layout).c_str());
+		microlog::error("transition layout", "Unsupported old layout %s", vk::to_string(old_layout).c_str());
 		break;
 	}
 
@@ -1483,7 +1472,7 @@ inline void transition(const vk::CommandBuffer &cmd,
 		dst_access_mask = vk::AccessFlagBits::eTransferWrite;
 		break;
 	default:
-		log::error("transition layout", "Unsupported new layout %s", vk::to_string(new_layout).c_str());
+		microlog::error("transition layout", "Unsupported new layout %s", vk::to_string(new_layout).c_str());
 		break;
 	}
 
@@ -1504,7 +1493,7 @@ inline void transition(const vk::CommandBuffer &cmd,
 	case vk::ImageLayout::eTransferSrcOptimal:
 		destination_stage = vk::PipelineStageFlagBits::eTransfer; break;
 	default:
-		log::error("transition layout", "Unsupported new layout %s", vk::to_string(new_layout).c_str());
+		microlog::error("transition layout", "Unsupported new layout %s", vk::to_string(new_layout).c_str());
 		break;
 	}
 
@@ -1944,7 +1933,7 @@ inline ShaderModuleReturnProxy compile(const vk::Device &device,
 	_compile_out out = glsl_to_spriv(source, defines, includes, shader_type);
 	if (!out.log.empty()) {
 		// TODO: show the errornous line(s)
-		log::error("shader", "Shader compilation failed:\n%s\nSource:\n%s",
+		microlog::error("shader", "Shader compilation failed:\n%s\nSource:\n%s",
 				out.log.c_str(), fmt_lines(out.source).c_str());
 		return true;
 	}
@@ -1972,7 +1961,7 @@ inline ShaderModuleReturnProxy compile(const vk::Device &device,
 	_compile_out out = glsl_to_spriv(source, defines, includes, shader_type);
 	if (!out.log.empty()) {
 		// TODO: show the errornous line(s)
-		log::error("shader", "Shader compilation failed:\n%s\nSource:\n%s",
+		microlog::error("shader", "Shader compilation failed:\n%s\nSource:\n%s",
 				out.log.c_str(), fmt_lines(out.source).c_str());
 		return true;
 	}
