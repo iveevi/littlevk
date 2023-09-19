@@ -62,6 +62,7 @@ vkDestroyDebugUtilsMessengerEXT(VkInstance instance,
 }
 
 // Logging
+// TODO: put in static global namespace
 namespace microlog {
 
 // Colors and formatting
@@ -914,6 +915,91 @@ inline AttachmentDescription default_depth_attachment()
 		.stencil_store_op(vk::AttachmentStoreOp::eDontCare)
 		.initial_layout(vk::ImageLayout::eUndefined)
 		.final_layout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
+}
+
+// Vulkan render pass begin info wrapper
+template <size_t AttachmentCount>
+struct RenderPassBeginInfo {
+	vk::RenderPass                               m_render_pass;
+	vk::Framebuffer                              m_framebuffer;
+	vk::Extent2D                                 m_extent;
+	std::array <vk::ClearValue, AttachmentCount> m_clear_values;
+
+	operator vk::RenderPassBeginInfo() const {
+		return vk::RenderPassBeginInfo(
+			m_render_pass,
+			m_framebuffer,
+			{ { 0, 0 }, m_extent },
+			m_clear_values
+		);
+	}
+
+	RenderPassBeginInfo &render_pass(const vk::RenderPass &render_pass) {
+		this->m_render_pass = render_pass;
+		return *this;
+	}
+
+	RenderPassBeginInfo &framebuffer(const vk::Framebuffer &framebuffer) {
+		this->m_framebuffer = framebuffer;
+		return *this;
+	}
+
+	RenderPassBeginInfo &extent(vk::Extent2D extent) {
+		this->m_extent = extent;
+		return *this;
+	}
+
+	RenderPassBeginInfo &clear_value(size_t index, vk::ClearValue clear_value) {
+		this->m_clear_values[index] = clear_value;
+		return *this;
+	}
+
+	vk::ClearValue &operator[](size_t index) {
+		return this->m_clear_values[index];
+	}
+
+	const vk::ClearValue &operator[](size_t index) const {
+		return this->m_clear_values[index];
+	}
+};
+
+// Presets
+template <size_t AttachmentCount>
+inline RenderPassBeginInfo <AttachmentCount> default_rp_begin_info
+		(const vk::RenderPass &render_pass,
+		 const vk::Framebuffer &framebuffer,
+		 const vk::Extent2D &extent)
+{
+	// Infers attachment layouts
+	static_assert(AttachmentCount == 1 || AttachmentCount == 2, "Can only infer up to two attachments");
+
+	// 1: Color only
+	if constexpr (AttachmentCount == 1) {
+		return RenderPassBeginInfo <AttachmentCount> ()
+			.render_pass(render_pass)
+			.framebuffer(framebuffer)
+			.extent(extent)
+			.clear_value(0, vk::ClearColorValue(std::array <float, 4> { 0.0f, 0.0f, 0.0f, 1.0f }));
+	}
+
+	// 2: Color + Depth
+	if constexpr (AttachmentCount == 2) {
+		return RenderPassBeginInfo <AttachmentCount> ()
+			.render_pass(render_pass)
+			.framebuffer(framebuffer)
+			.extent(extent)
+			.clear_value(0, vk::ClearColorValue(std::array <float, 4> { 0.0f, 0.0f, 0.0f, 1.0f }))
+			.clear_value(1, vk::ClearDepthStencilValue(1.0f, 0));
+	}
+}
+
+template <size_t AttachmentCount>
+inline RenderPassBeginInfo <AttachmentCount> default_rp_begin_info
+		(const vk::RenderPass &render_pass,
+		 const vk::Framebuffer &framebuffer,
+		 const Window *window)
+{
+	return default_rp_begin_info <AttachmentCount> (render_pass, framebuffer, window->extent);
 }
 
 // Syncronization primitive for presentation
@@ -1994,10 +2080,10 @@ struct GraphicsCreateInfo {
 	vk::ShaderModule fragment_shader;
 
 	vk::Extent2D extent;
-	
+
 	vk::PolygonMode fill_mode = vk::PolygonMode::eFill;
 	vk::CullModeFlags cull_mode = vk::CullModeFlagBits::eBack;
-	
+
 	bool dynamic_viewport = false;
 	bool alpha_blend = false;
 
@@ -2075,7 +2161,7 @@ inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreat
 			vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA
 		};
 	}
-	
+
 	vk::PipelineColorBlendStateCreateInfo color_blending {
 		{}, false, vk::LogicOp::eCopy,
 		1, &color_blend_attachment,
@@ -2105,7 +2191,7 @@ inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreat
 	).value;
 }
 
-struct ComputeCreateInfo {};
+// struct ComputeCreateInfo {};
 
 } // namespace pipeline
 

@@ -18,7 +18,6 @@ include_directories(.. glm stb)
 
 set(LIBRARIES
 	Vulkan::Vulkan glfw SPIRV
-	glslang::glslang
 	glslang::glslang-default-resource-limits
 	assimp)
 
