@@ -917,6 +917,68 @@ inline AttachmentDescription default_depth_attachment()
 		.final_layout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
 }
 
+// Present render passes
+static void destroy_render_pass(const vk::Device &device, const vk::RenderPass &render_pass)
+{
+	device.destroyRenderPass(render_pass);
+}
+
+using RenderPassReturnProxy = DeviceReturnProxy <vk::RenderPass, destroy_render_pass>;
+
+inline RenderPassReturnProxy render_pass(const vk::Device &device, const vk::RenderPassCreateInfo &info)
+{
+	vk::RenderPass render_pass;
+	if (device.createRenderPass(&info, nullptr, &render_pass) != vk::Result::eSuccess)
+		return  true;
+
+	return std::move(render_pass);
+}
+
+inline RenderPassReturnProxy default_color_render_pass(const vk::Device &device, const vk::Format &format)
+{
+	std::array <vk::AttachmentDescription, 1> attachments {
+		default_color_attachment(format)
+	};
+
+	vk::SubpassDescription subpass {
+		{}, vk::PipelineBindPoint::eGraphics, 0, nullptr, 1, nullptr, nullptr, nullptr, 0, nullptr
+	};
+
+	vk::RenderPassCreateInfo info {
+		{}, attachments, subpass
+	};
+
+	return render_pass(device, info);
+}
+
+inline RenderPassReturnProxy default_color_depth_render_pass(const vk::Device &device, const vk::Format &format)
+{
+	std::array <vk::AttachmentDescription, 2> attachments {
+		default_color_attachment(format),
+		default_depth_attachment()
+	};
+
+	vk::AttachmentReference color_attachment {
+		0, vk::ImageLayout::eColorAttachmentOptimal
+	};
+
+	vk::AttachmentReference depth_attachment {
+		1, vk::ImageLayout::eDepthStencilAttachmentOptimal
+	};
+
+	vk::SubpassDescription subpass {
+		{}, vk::PipelineBindPoint::eGraphics,
+		{}, color_attachment,
+		{}, &depth_attachment
+	};
+
+	vk::RenderPassCreateInfo info {
+		{}, attachments, subpass
+	};
+
+	return render_pass(device, info);
+}
+
 // Vulkan render pass begin info wrapper
 template <size_t AttachmentCount>
 struct RenderPassBeginInfo {
@@ -1228,6 +1290,7 @@ inline bool Skeleton::skeletonize(const vk::PhysicalDevice &phdev_,
 
 inline bool Skeleton::destroy()
 {
+	device.waitIdle();
         destroy_window(window);
 	destroy_swapchain(device, swapchain);
 	detail::get_vulkan_instance().destroySurfaceKHR(surface);
@@ -1687,23 +1750,7 @@ inline void submit_now(const vk::Device &device, const vk::CommandPool &pool, co
 	device.freeCommandBuffers(pool, 1, &cmd);
 }
 
-// Companion functions with automatic memory management
-static void destroy_render_pass(const vk::Device &device, const vk::RenderPass &render_pass)
-{
-	device.destroyRenderPass(render_pass);
-}
-
-using RenderPassReturnProxy = DeviceReturnProxy <vk::RenderPass, destroy_render_pass>;
-
-inline RenderPassReturnProxy render_pass(const vk::Device &device, const vk::RenderPassCreateInfo &info)
-{
-	vk::RenderPass render_pass;
-	if (device.createRenderPass(&info, nullptr, &render_pass) != vk::Result::eSuccess)
-		return  true;
-
-	return std::move(render_pass);
-}
-
+// Other companion functions with automatic memory management
 static void destroy_command_pool(const vk::Device &device, const vk::CommandPool &pool)
 {
 	device.destroyCommandPool(pool);
@@ -2168,10 +2215,6 @@ inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreat
 		{ 0.0f, 0.0f, 0.0f, 0.0f }
 	};
 
-	vk::PipelineLayoutCreateInfo pipeline_layout_info {
-		{}, 0, nullptr, 0, nullptr
-	};
-
 	return device.createGraphicsPipeline(nullptr,
 		vk::GraphicsPipelineCreateInfo {
 			{},
@@ -2190,8 +2233,6 @@ inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreat
 		}
 	).value;
 }
-
-// struct ComputeCreateInfo {};
 
 } // namespace pipeline
 
