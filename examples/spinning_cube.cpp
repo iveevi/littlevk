@@ -271,6 +271,7 @@ int main()
 	pipeline_info.extent = app.window->extent;
 	pipeline_info.pipeline_layout = pipeline_layout;
 	pipeline_info.render_pass = render_pass;
+	pipeline_info.dynamic_viewport = true;
 
 	vk::Pipeline pipeline = littlevk::pipeline::compile(app.device, pipeline_info).unwrap(deallocator);
 
@@ -343,10 +344,13 @@ int main()
 		cmd.begin(vk::CommandBufferBeginInfo {});
 		cmd.beginRenderPass(render_pass_info, vk::SubpassContents::eInline);
 
+		// Set viewport and scissor
+		littlevk::viewport_and_scissor(command_buffers[frame], littlevk::RenderArea(app.window));
+
 		// Render the triangle
 		glm::mat4 proj = glm::perspective(
 			glm::radians(45.0f),
-			app.window->extent.width / (float) app.window->extent.height,
+			app.aspect_ratio(),
 			0.1f, 10.0f
 		);
 

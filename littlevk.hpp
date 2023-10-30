@@ -1053,6 +1053,32 @@ inline RenderPassBeginInfo <AttachmentCount> default_rp_begin_info
 	return default_rp_begin_info <AttachmentCount> (render_pass, framebuffer, window->extent);
 }
 
+// Configuring viewport and scissor
+struct RenderArea {
+	// float x, y, w, h;
+	vk::Extent2D extent;
+
+	RenderArea() = delete;
+	RenderArea(const Window *window) : extent(window->extent) {}
+};
+	
+inline void viewport_and_scissor(const vk::CommandBuffer &cmd, const RenderArea &area)
+{
+	vk::Viewport viewport {
+		0.0f, 0.0f,
+		(float) area.extent.width,
+		(float) area.extent.height,
+		0.0f, 1.0f
+	};
+
+	vk::Rect2D scissor {
+		{}, area.extent
+	};
+
+	cmd.setViewport(0, viewport);
+	cmd.setScissor(0, scissor);
+};
+
 // Syncronization primitive for presentation
 struct PresentSyncronization {
         std::vector <vk::Semaphore> image_available;
@@ -2189,8 +2215,16 @@ inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreat
 		{}, vk::PrimitiveTopology::eTriangleList
 	};
 
-	// TODO: dynamic state options
-	assert(!info.dynamic_viewport); // NOTE: temporary
+	// Configuring the viewport
+	vk::PipelineViewportStateCreateInfo viewport_state {
+		{}, 1, nullptr, 1, nullptr
+	};
+
+	vk::PipelineDynamicStateCreateInfo dynamic_state {
+		{}, 0, nullptr
+	};
+
+	// Fixed viewport
 	vk::Viewport viewport {
 		0.0f, 0.0f,
 		(float) info.extent.width, (float) info.extent.height,
@@ -2198,9 +2232,23 @@ inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreat
 	};
 
 	vk::Rect2D scissor { {}, info.extent };
-	vk::PipelineViewportStateCreateInfo viewport_state {
-		{}, 1, &viewport, 1, &scissor
+
+	// Dynamic viewport
+	std::array <vk::DynamicState, 2> dynamic_states {
+		vk::DynamicState::eViewport,
+		vk::DynamicState::eScissor
 	};
+
+	// Select according to the configuration
+	if (info.dynamic_viewport) {
+		dynamic_state = vk::PipelineDynamicStateCreateInfo {
+			{}, (uint32_t) dynamic_states.size(), dynamic_states.data()
+		};
+	} else {
+		viewport_state = vk::PipelineViewportStateCreateInfo {
+			{}, 1, &viewport, 1, &scissor
+		};
+	}
 
 	vk::PipelineRasterizationStateCreateInfo rasterizer {
 		{}, false, false,
@@ -2259,7 +2307,7 @@ inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreat
 			&multisampling,
 			&depth_stencil,
 			&color_blending,
-			nullptr,
+			&dynamic_state,
 			info.pipeline_layout,
 			info.render_pass,
 		}

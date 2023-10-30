@@ -167,6 +167,7 @@ int main()
 	pipeline_info.extent = app.window->extent;
 	pipeline_info.pipeline_layout = pipeline_layout;
 	pipeline_info.render_pass = render_pass;
+	pipeline_info.dynamic_viewport = true;
 
 	vk::Pipeline pipeline = littlevk::pipeline::compile(app.device, pipeline_info).unwrap(deallocator);
 
@@ -178,6 +179,8 @@ int main()
 		fb_info.extent = app.window->extent;
 		framebuffers = littlevk::framebuffers(app.device, fb_info).unwrap(deallocator);
 	};
+
+	// TODO: text render framerate
 
 	// Render loop
         uint32_t frame = 0;
@@ -193,19 +196,15 @@ int main()
 			continue;
 		}
 
-		// Start empty render pass
-		vk::ClearValue clear_value = vk::ClearColorValue {
-			std::array <float, 4> { 0.0f, 0.0f, 0.0f, 1.0f }
-		};
-
-		vk::RenderPassBeginInfo render_pass_info {
-			render_pass, framebuffers[op.index],
-			vk::Rect2D { {}, app.window->extent },
-			clear_value
-		};
+		// Start the render pass
+		const auto &rpbi = littlevk::default_rp_begin_info <2> (render_pass, framebuffers[op.index], app.window);
 
 		command_buffers[frame].begin(vk::CommandBufferBeginInfo {});
-		command_buffers[frame].beginRenderPass(render_pass_info, vk::SubpassContents::eInline);
+
+		// Set viewport and scissor
+		littlevk::viewport_and_scissor(command_buffers[frame], littlevk::RenderArea(app.window));
+
+		command_buffers[frame].beginRenderPass(rpbi, vk::SubpassContents::eInline);
 
 		// Render the triangle
 		command_buffers[frame].bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);

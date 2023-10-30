@@ -102,7 +102,7 @@ int main(int argc, char *argv[])
 	}};
 
 	argparser.parse(argc, argv);
-	
+
 	std::filesystem::path path;
 	path = argparser.get <std::string> (0);
 	path = std::filesystem::weakly_canonical(path);
@@ -137,7 +137,7 @@ int main(int argc, char *argv[])
 
 	// Create a deallocator for automatic resource cleanup
 	auto deallocator = new littlevk::Deallocator { app.device };
-	
+
 	// Create a render pass
 	std::array <vk::AttachmentDescription, 2> attachments {
 		littlevk::default_color_attachment(app.swapchain.format),
@@ -220,7 +220,7 @@ int main(int argc, char *argv[])
 
 	littlevk::upload(app.device, vertex_buffer, mesh.vertices);
 	littlevk::upload(app.device, index_buffer, mesh.indices);
-	
+
 	// Compile shader modules
 	vk::ShaderModule vertex_module = littlevk::shader::compile(
 		app.device, vertex_shader_source,
@@ -231,7 +231,7 @@ int main(int argc, char *argv[])
 		app.device, fragment_shader_source,
 		vk::ShaderStageFlagBits::eFragment
 	).unwrap(deallocator);
-	
+
 	// Create a graphics pipeline
 	struct PushConstants {
 		glm::mat4 model;
@@ -254,7 +254,7 @@ int main(int argc, char *argv[])
 			push_constant_range
 		}
 	).unwrap(deallocator);
-	
+
 	littlevk::pipeline::GraphicsCreateInfo pipeline_info;
 	pipeline_info.vertex_binding = Vertex::binding();
 	pipeline_info.vertex_attributes = Vertex::attributes();
@@ -263,9 +263,10 @@ int main(int argc, char *argv[])
 	pipeline_info.extent = app.window->extent;
 	pipeline_info.pipeline_layout = pipeline_layout;
 	pipeline_info.render_pass = render_pass;
+	pipeline_info.dynamic_viewport = true;
 
 	vk::Pipeline pipeline = littlevk::pipeline::compile(app.device, pipeline_info).unwrap(deallocator);
-	
+
 	// Syncronization primitives
 	auto sync = littlevk::present_syncronization(app.device, 2).unwrap(deallocator);
 
@@ -278,12 +279,6 @@ int main(int argc, char *argv[])
 		radius * glm::vec3 { 0.0f, 0.0f, glm::length(max - min) },
 		glm::vec3 { 0.0f, 0.0f, 0.0f },
 		glm::vec3 { 0.0f, 1.0f, 0.0f }
-	);
-
-	glm::mat4 proj = glm::perspective(
-		glm::radians(45.0f),
-		app.window->extent.width / (float) app.window->extent.height,
-		0.1f, 100 * glm::length(max - min)
 	);
 
 	// Pre render items
@@ -387,21 +382,27 @@ int main(int argc, char *argv[])
 
 		cmd.begin(vk::CommandBufferBeginInfo {});
 		cmd.beginRenderPass(render_pass_info, vk::SubpassContents::eInline);
-		
+
+		// Set viewport and scissor
+		littlevk::viewport_and_scissor(cmd, littlevk::RenderArea(app.window));
+
 		// Render the triangle
 		PushConstants push_constants;
 
 		// Rotate the model matrix
+		push_constants.view = view;
+
 		push_constants.model = glm::rotate(
 			model,
 			current_time * glm::radians(90.0f),
 			glm::vec3 { 0.0f, 1.0f, 0.0f }
 		);
 
-		// push_constants.model = model;
-
-		push_constants.view = view;
-		push_constants.proj = proj;
+		push_constants.proj = glm::perspective(
+			glm::radians(45.0f),
+			app.aspect_ratio(),
+			0.1f, 100 * glm::length(max - min)
+		);
 
 		push_constants.color = glm::vec3 { 1.0f, 0.0f, 0.0f };
 		push_constants.light_direction = glm::normalize(glm::vec3 { 0, 0, 1 });

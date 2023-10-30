@@ -125,7 +125,7 @@ struct App : littlevk::Skeleton {
 	vk::PhysicalDeviceMemoryProperties memory_properties;
 
 	littlevk::Deallocator *deallocator = nullptr;
-	
+
 	vk::CommandPool command_pool;
 
 	std::map <std::string, littlevk::Image> image_cache;
@@ -145,10 +145,10 @@ App make_app()
 
 	app.phdev = littlevk::pick_physical_device(predicate);
 	app.memory_properties = app.phdev.getMemoryProperties();
-	
+
 	// Create an application skeleton with the bare minimum
         app.skeletonize(app.phdev, { 800, 600 }, "Model Viewer");
-	
+
 	// Add the rest of the application
 	app.deallocator = new littlevk::Deallocator { app.device };
 
@@ -505,10 +505,11 @@ int main(int argc, char *argv[])
 	pipeline_info.vertex_shader = vertex_module;
 	pipeline_info.extent = app.window->extent;
 	pipeline_info.render_pass = render_pass;
+	pipeline_info.dynamic_viewport = true;
 
 	pipeline_info.fragment_shader = textured_fragment_module;
 	pipeline_info.pipeline_layout = textured_pipeline_layout;
-	
+
 	vk::Pipeline textured_pipeline = littlevk::pipeline::compile(app.device, pipeline_info).unwrap(app.deallocator);
 
 	pipeline_info.fragment_shader = default_fragment_module;
@@ -532,12 +533,6 @@ int main(int argc, char *argv[])
 	auto sync = littlevk::present_syncronization(app.device, 2).unwrap(app.deallocator);
 
 	// Prepare camera and model matrices
-	glm::mat4 proj = glm::perspective(
-		glm::radians(45.0f),
-		app.window->extent.width / (float) app.window->extent.height,
-		0.1f, 100.0f * glm::length(max - min)
-	);
-
 	g_state.center = center;
 	g_state.radius = glm::length(max - min);
 	rotate_view(0.0f, 0.0f);
@@ -628,13 +623,20 @@ int main(int argc, char *argv[])
 		cmd.begin(vk::CommandBufferBeginInfo {});
 		cmd.beginRenderPass(render_pass_info, vk::SubpassContents::eInline);
 
+		// Set viewport and scissor
+		littlevk::viewport_and_scissor(cmd, littlevk::RenderArea(app.window));
+
 		// Render the triangle
 		PushConstants push_constants;
 
 		// Rotate the model matrix
 		push_constants.model = glm::mat4 { 1.0f };
 		push_constants.view = g_state.view;
-		push_constants.proj = proj;
+		push_constants.proj = glm::perspective(
+			glm::radians(45.0f),
+			app.aspect_ratio(),
+			0.1f, 100.0f * glm::length(max - min)
+		);
 
 		push_constants.light_direction = glm::normalize(glm::vec3 { 1.0f, 1.0f, 1.0f });
 
