@@ -996,32 +996,24 @@ struct RenderPassBeginInfo {
 		);
 	}
 
-	RenderPassBeginInfo &render_pass(const vk::RenderPass &render_pass) {
-		this->m_render_pass = render_pass;
-		return *this;
+	RenderPassBeginInfo render_pass(vk::RenderPass render_pass) && {
+		m_render_pass = render_pass;
+		return std::move(*this);
 	}
 
-	RenderPassBeginInfo &framebuffer(const vk::Framebuffer &framebuffer) {
-		this->m_framebuffer = framebuffer;
-		return *this;
+	RenderPassBeginInfo framebuffer(vk::Framebuffer framebuffer) && {
+		m_framebuffer = framebuffer;
+		return std::move(*this);
 	}
 
-	RenderPassBeginInfo &extent(vk::Extent2D extent) {
-		this->m_extent = extent;
-		return *this;
+	RenderPassBeginInfo extent(vk::Extent2D extent) && {
+		m_extent = extent;
+		return std::move(*this);
 	}
 
-	RenderPassBeginInfo &clear_value(size_t index, vk::ClearValue clear_value) {
-		this->m_clear_values[index] = clear_value;
-		return *this;
-	}
-
-	vk::ClearValue &operator[](size_t index) {
-		return this->m_clear_values[index];
-	}
-
-	const vk::ClearValue &operator[](size_t index) const {
-		return this->m_clear_values[index];
+	RenderPassBeginInfo clear_value(size_t index, vk::ClearValue clear_value) && {
+		m_clear_values[index] = clear_value;
+		return std::move(*this);
 	}
 };
 
@@ -1037,11 +1029,13 @@ inline RenderPassBeginInfo <AttachmentCount> default_rp_begin_info
 
 	// 1: Color only
 	if constexpr (AttachmentCount == 1) {
-		return RenderPassBeginInfo <AttachmentCount> ()
+		const auto &rpbi = RenderPassBeginInfo <AttachmentCount> ()
 			.render_pass(render_pass)
 			.framebuffer(framebuffer)
 			.extent(extent)
 			.clear_value(0, vk::ClearColorValue(std::array <float, 4> { 0.0f, 0.0f, 0.0f, 1.0f }));
+
+		return rpbi;
 	}
 
 	// 2: Color + Depth
@@ -1217,6 +1211,8 @@ struct Skeleton {
                 const vk::Extent2D &,
                 const std::string &);
 
+	float aspect_ratio() const;
+
 	virtual bool destroy();
 };
 
@@ -1286,6 +1282,11 @@ inline bool Skeleton::skeletonize(const vk::PhysicalDevice &phdev_,
         present_queue = device.getQueue(queue_family.present, 0);
 
 	return true;
+}
+
+inline float Skeleton::aspect_ratio() const
+{
+	return (float) window->extent.width / (float) window->extent.height;
 }
 
 inline bool Skeleton::destroy()
