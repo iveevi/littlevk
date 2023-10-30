@@ -174,31 +174,7 @@ int main()
 	auto sync = littlevk::present_syncronization(app.device, 2).unwrap(deallocator);
 
 	auto resize = [&]() {
-		int new_width = 0;
-		int new_height = 0;
-		
-		int current_width = 0;
-		int current_height = 0;
-		
-		do {
-			glfwGetFramebufferSize(app.window->handle, &current_width, &current_height);
-			while (current_width == 0 || current_height == 0) {
-				glfwWaitEvents();
-				glfwGetFramebufferSize(app.window->handle, &current_width, &current_height);
-			}
-
-			vk::SurfaceCapabilitiesKHR caps = app.phdev.getSurfaceCapabilitiesKHR(app.surface);
-			new_width = std::clamp(new_width, int(caps.minImageExtent.width), int(caps.maxImageExtent.width));
-			new_height = std::clamp(new_height, int(caps.minImageExtent.height), int(caps.maxImageExtent.height));
-
-			app.device.waitIdle();
-			littlevk::resize(app.device, app.swapchain, { uint32_t(new_width), uint32_t(new_height) });
-
-			glfwGetFramebufferSize(app.window->handle, &new_width, &new_height);
-		} while (new_width != current_width || new_height != current_height);
-	
-		printf("Resized to %dx%d\n", new_width, new_height);
-		app.window->extent = vk::Extent2D { uint32_t(new_width), uint32_t(new_height) };
+		app.resize();
 		fb_info.extent = app.window->extent;
 		framebuffers = littlevk::framebuffers(app.device, fb_info).unwrap(deallocator);
 	};
@@ -211,9 +187,8 @@ int main()
                         break;
 
 		littlevk::SurfaceOperation op;
-                op = littlevk::acquire_image(app.device, app.swapchain.swapchain, sync, frame);
+                op = littlevk::acquire_image(app.device, app.swapchain.swapchain, sync[frame]);
 		if (op.status == littlevk::SurfaceOperation::eResize) {
-			printf("resize after acquire\n");
 			resize();
 			continue;
 		}
@@ -226,7 +201,7 @@ int main()
 		vk::RenderPassBeginInfo render_pass_info {
 			render_pass, framebuffers[op.index],
 			vk::Rect2D { {}, app.window->extent },
-			1, &clear_value
+			clear_value
 		};
 
 		command_buffers[frame].begin(vk::CommandBufferBeginInfo {});
@@ -244,24 +219,19 @@ int main()
 		vk::PipelineStageFlags wait_stage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
 
 		vk::SubmitInfo submit_info {
-			1, &sync.image_available[frame],
-			&wait_stage,
-			1, &command_buffers[frame],
-			1, &sync.render_finished[frame]
+			sync.image_available[frame],
+			wait_stage,
+			command_buffers[frame],
+			sync.render_finished[frame]
 		};
 
 		app.graphics_queue.submit(submit_info, sync.in_flight[frame]);
 
-                op = littlevk::present_image(app.present_queue, app.swapchain.swapchain, sync, op.index);
-		frame = 1 - frame;
-	
-		printf("Frame %d\n", frame);
-		if (op.status == littlevk::SurfaceOperation::eResize) {
-			printf("resize after present\n");
+                op = littlevk::present_image(app.present_queue, app.swapchain.swapchain, sync[frame], op.index);
+		if (op.status == littlevk::SurfaceOperation::eResize)
 			resize();
-		}
 
-		// TODO: resize function
+		frame = 1 - frame;
         }
 
 	// Finish all pending operations

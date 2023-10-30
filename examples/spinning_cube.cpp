@@ -57,7 +57,7 @@ int main()
 
 	// Create a deallocator for automatic resource cleanup
 	auto deallocator = new littlevk::Deallocator { app.device };
-	
+
 	// Create a render pass
 	std::array <vk::AttachmentDescription, 2> attachments {
 		vk::AttachmentDescription {
@@ -231,7 +231,7 @@ int main()
 
 	littlevk::upload(app.device, vertex_buffer, cube_vertex_data);
 	littlevk::upload(app.device, index_buffer, cube_index_data);
-	
+
 	// Compile shader modules
 	vk::ShaderModule vertex_module = littlevk::shader::compile(
 		app.device, vertex_shader_source,
@@ -242,7 +242,7 @@ int main()
 		app.device, fragment_shader_source,
 		vk::ShaderStageFlagBits::eFragment
 	).unwrap(deallocator);
-	
+
 	// Create a graphics pipeline
 	struct PushConstants {
 		glm::mat4 model;
@@ -262,7 +262,7 @@ int main()
 			push_constant_range
 		}
 	).unwrap(deallocator);
-	
+
 	littlevk::pipeline::GraphicsCreateInfo pipeline_info;
 	pipeline_info.vertex_binding = Vertex::binding();
 	pipeline_info.vertex_attributes = Vertex::attributes();
@@ -273,24 +273,43 @@ int main()
 	pipeline_info.render_pass = render_pass;
 
 	vk::Pipeline pipeline = littlevk::pipeline::compile(app.device, pipeline_info).unwrap(deallocator);
-	
+
 	// Syncronization primitives
 	auto sync = littlevk::present_syncronization(app.device, 2).unwrap(deallocator);
 
 	// Prepare camera and model matrices
 	glm::mat4 model = glm::mat4 { 1.0f };
-	
+
 	glm::mat4 view = glm::lookAt(
 		glm::vec3 { 0.0f, 0.0f, 5.0f },
 		glm::vec3 { 0.0f, 0.0f, 0.0f },
 		glm::vec3 { 0.0f, 1.0f, 0.0f }
 	);
-	
-	glm::mat4 proj = glm::perspective(
-		glm::radians(45.0f),
-		app.window->extent.width / (float) app.window->extent.height,
-		0.1f, 10.0f
-	);
+
+	// Resize callback
+	auto resize = [&]() {
+		app.resize();
+
+		// Recreate the depth buffer
+		littlevk::ImageCreateInfo depth_info {
+			app.window->extent.width,
+			app.window->extent.height,
+			vk::Format::eD32Sfloat,
+			vk::ImageUsageFlagBits::eDepthStencilAttachment,
+			vk::ImageAspectFlagBits::eDepth,
+		};
+
+		littlevk::Image depth_buffer = littlevk::image(
+			app.device,
+			depth_info, mem_props
+		).unwrap(deallocator);
+
+		// Rebuid the framebuffers
+		fb_info.depth_buffer = &depth_buffer.view;
+		fb_info.extent = app.window->extent;
+
+		framebuffers = littlevk::framebuffers(app.device, fb_info).unwrap(deallocator);
+	};
 
 	// Render loop
         uint32_t frame = 0;
@@ -300,7 +319,11 @@ int main()
                         break;
 
 		littlevk::SurfaceOperation op;
-                op = littlevk::acquire_image(app.device, app.swapchain.swapchain, sync, frame);
+                op = littlevk::acquire_image(app.device, app.swapchain.swapchain, sync[frame]);
+		if (op.status == littlevk::SurfaceOperation::eResize) {
+			resize();
+			continue;
+		}
 
 		// Start empty render pass
 		std::array <vk::ClearValue, 2> clear_values {
@@ -319,8 +342,14 @@ int main()
 
 		cmd.begin(vk::CommandBufferBeginInfo {});
 		cmd.beginRenderPass(render_pass_info, vk::SubpassContents::eInline);
-		
+
 		// Render the triangle
+		glm::mat4 proj = glm::perspective(
+			glm::radians(45.0f),
+			app.window->extent.width / (float) app.window->extent.height,
+			0.1f, 10.0f
+		);
+
 		PushConstants push_constants {
 			model, view, proj
 		};
@@ -353,10 +382,11 @@ int main()
 
 		app.graphics_queue.submit(submit_info, sync.in_flight[frame]);
 
-                op = littlevk::present_image(app.present_queue, app.swapchain.swapchain, sync, op.index);
+                op = littlevk::present_image(app.present_queue, app.swapchain.swapchain, sync[frame], op.index);
+		if (op.status == littlevk::SurfaceOperation::eResize)
+			resize();
 
 		frame = 1 - frame;
-		// TODO: resize function
         }
 
 	// Finish all pending operations

@@ -294,8 +294,33 @@ int main(int argc, char *argv[])
 	float current_time = 0.0f;
 
 	printf("Instructions:\n");
-	printf("[+/-]   Zoom in/out\n");
+	printf("[ +/- ] Zoom in/out\n");
 	printf("[Space] Pause/resume rotation\n");
+
+	// Resize callback
+	auto resize = [&]() {
+		app.resize();
+
+		// Recreate the depth buffer
+		littlevk::ImageCreateInfo depth_info {
+			app.window->extent.width,
+			app.window->extent.height,
+			vk::Format::eD32Sfloat,
+			vk::ImageUsageFlagBits::eDepthStencilAttachment,
+			vk::ImageAspectFlagBits::eDepth,
+		};
+
+		littlevk::Image depth_buffer = littlevk::image(
+			app.device,
+			depth_info, mem_props
+		).unwrap(deallocator);
+
+		// Rebuid the framebuffers
+		fb_info.depth_buffer = &depth_buffer.view;
+		fb_info.extent = app.window->extent;
+
+		framebuffers = littlevk::framebuffers(app.device, fb_info).unwrap(deallocator);
+	};
 
 	// Render loop
         uint32_t frame = 0;
@@ -339,7 +364,11 @@ int main(int argc, char *argv[])
 
 		// Rendering
 		littlevk::SurfaceOperation op;
-                op = littlevk::acquire_image(app.device, app.swapchain.swapchain, sync, frame);
+                op = littlevk::acquire_image(app.device, app.swapchain.swapchain, sync[frame]);
+		if (op.status == littlevk::SurfaceOperation::eResize) {
+			resize();
+			continue;
+		}
 
 		// Start empty render pass
 		std::array <vk::ClearValue, 2> clear_values {
@@ -398,10 +427,11 @@ int main(int argc, char *argv[])
 
 		app.graphics_queue.submit(submit_info, sync.in_flight[frame]);
 
-                op = littlevk::present_image(app.present_queue, app.swapchain.swapchain, sync, op.index);
+                op = littlevk::present_image(app.present_queue, app.swapchain.swapchain, sync[frame], op.index);
+		if (op.status == littlevk::SurfaceOperation::eResize)
+			resize();
 
 		frame = 1 - frame;
-		// TODO: resize function
         }
 
 	// Finish all pending operations

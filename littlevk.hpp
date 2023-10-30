@@ -767,8 +767,6 @@ inline void resize(const vk::Device &device,
 	}
 }
 
-// TODO: and a handle_resize function
-
 inline void destroy_swapchain(const vk::Device &device, Swapchain &swapchain)
 {
 	// Destroy image views
@@ -800,8 +798,6 @@ struct FramebufferSetInfo {
 	vk::RenderPass render_pass;
 	vk::Extent2D extent;
 	vk::ImageView *depth_buffer = nullptr;
-	// TODO: depth buffer as well...
-	// vk::ImageView *depth_buffer_view = nullptr;
 };
 
 inline FramebufferSetReturnProxy framebuffers(const vk::Device &device, const FramebufferSetInfo &info)
@@ -849,6 +845,7 @@ struct AttachmentDescription {
 		);
 	}
 
+	// TODO: ref qualifier correction...
 	AttachmentDescription &format(vk::Format format) {
 		this->m_format = format;
 		return *this;
@@ -1029,13 +1026,11 @@ inline RenderPassBeginInfo <AttachmentCount> default_rp_begin_info
 
 	// 1: Color only
 	if constexpr (AttachmentCount == 1) {
-		const auto &rpbi = RenderPassBeginInfo <AttachmentCount> ()
+		return RenderPassBeginInfo <AttachmentCount> ()
 			.render_pass(render_pass)
 			.framebuffer(framebuffer)
 			.extent(extent)
 			.clear_value(0, vk::ClearColorValue(std::array <float, 4> { 0.0f, 0.0f, 0.0f, 1.0f }));
-
-		return rpbi;
 	}
 
 	// 2: Color + Depth
@@ -1063,6 +1058,20 @@ struct PresentSyncronization {
         std::vector <vk::Semaphore> image_available;
         std::vector <vk::Semaphore> render_finished;
         std::vector <vk::Fence> in_flight;
+
+	struct Frame {
+		const vk::Semaphore &image_available;
+		const vk::Semaphore &render_finished;
+		const vk::Fence &in_flight;
+	};
+
+	Frame operator[](size_t index) const {
+		return Frame {
+			image_available[index],
+			render_finished[index],
+			in_flight[index]
+		};
+	}
 };
 
 inline void destroy_present_syncronization(const vk::Device &device, const PresentSyncronization &sync)
@@ -1112,14 +1121,13 @@ struct SurfaceOperation {
 
 inline SurfaceOperation acquire_image(const vk::Device &device,
                 const vk::SwapchainKHR &swapchain,
-                const PresentSyncronization &sync,
-                uint32_t frame)
+                const PresentSyncronization::Frame &sync_frame)
 {
         // Wait for previous frame to finish
-        (void) device.waitForFences(sync.in_flight[frame], VK_TRUE, UINT64_MAX);
+        (void) device.waitForFences(sync_frame.in_flight, VK_TRUE, UINT64_MAX);
 
         // Acquire image
-        auto [result, image_index] = device.acquireNextImageKHR(swapchain, UINT64_MAX, sync.image_available[frame], nullptr);
+        auto [result, image_index] = device.acquireNextImageKHR(swapchain, UINT64_MAX, sync_frame.image_available, nullptr);
 
         if (result == vk::Result::eErrorOutOfDateKHR) {
 		microlog::warning("acquire_image", "Swapchain out of date\n");
@@ -1130,18 +1138,18 @@ inline SurfaceOperation acquire_image(const vk::Device &device,
         }
 
         // Reset fence to prepare for next frame
-        device.resetFences(sync.in_flight[frame]);
+        device.resetFences(sync_frame.in_flight);
 
         return { SurfaceOperation::eOk, image_index };
 }
 
 inline SurfaceOperation present_image(const vk::Queue &queue,
                 const vk::SwapchainKHR &swapchain,
-                const PresentSyncronization &sync,
+                const PresentSyncronization::Frame &sync_frame,
                 uint32_t index)
 {
         vk::PresentInfoKHR present_info {
-                sync.render_finished[index],
+                sync_frame.render_finished,
                 swapchain,
                 index
         };
@@ -1170,8 +1178,7 @@ inline bool physical_device_able(const vk::PhysicalDevice &phdev, const std::vec
 				[&extension](const vk::ExtensionProperties &prop) {
 					return !strcmp(prop.extensionName, extension);
 				}) == device_extensions.end()) {
-			// KOBRA_LOG_FUNC(Log::WARN) << "Extension \"" << extension
-					// << "\" is not supported\n";
+			microlog::warning("physical_device_able", "Extension \"%s\" is not supported\n", extension);
 			return false;
 		}
 	}
@@ -1192,8 +1199,8 @@ inline vk::PhysicalDevice pick_physical_device(const std::function <bool (const 
 	}
 
 	// If none found, throw an error
-	// KOBRA_LOG_FUNC(Log::ERROR) << "No physical device found\n";
-	throw std::runtime_error("[Vulkan] No physical device found");
+	microlog::error("pick_physical_device", "No physical device found\n");
+	return nullptr;
 }
 
 struct Skeleton {
@@ -1207,13 +1214,16 @@ struct Skeleton {
         Swapchain swapchain;
         Window *window = nullptr;
 
+	// TODO: no default constructor, this turns into a constructor...
 	bool skeletonize(const vk::PhysicalDevice &,
                 const vk::Extent2D &,
                 const std::string &);
 
-	float aspect_ratio() const;
-
+	// TODO: virtual destructor
 	virtual bool destroy();
+
+	void resize();
+	float aspect_ratio() const;
 };
 
 // Create logical device on an arbitrary queue
@@ -1257,7 +1267,6 @@ inline vk::Device device(const vk::PhysicalDevice &phdev,
 	return device(phdev, indices.graphics, count, extensions);
 }
 
-// TODO: refactor to skeleton
 inline bool Skeleton::skeletonize(const vk::PhysicalDevice &phdev_,
                 const vk::Extent2D &extent,
                 const std::string &title)
@@ -1284,11 +1293,6 @@ inline bool Skeleton::skeletonize(const vk::PhysicalDevice &phdev_,
 	return true;
 }
 
-inline float Skeleton::aspect_ratio() const
-{
-	return (float) window->extent.width / (float) window->extent.height;
-}
-
 inline bool Skeleton::destroy()
 {
 	device.waitIdle();
@@ -1297,6 +1301,41 @@ inline bool Skeleton::destroy()
 	detail::get_vulkan_instance().destroySurfaceKHR(surface);
 	device.destroy();
 	return true;
+}
+
+inline void Skeleton::resize()
+{
+	int new_width = 0;
+	int new_height = 0;
+
+	int current_width = 0;
+	int current_height = 0;
+
+	do {
+		glfwGetFramebufferSize(window->handle, &current_width, &current_height);
+		while (current_width == 0 || current_height == 0) {
+			glfwWaitEvents();
+			glfwGetFramebufferSize(window->handle, &current_width, &current_height);
+		}
+
+		glfwGetFramebufferSize(window->handle, &new_width, &new_height);
+	} while (new_width != current_width || new_height != current_height);
+
+	// Resize only after stable sizes
+	vk::SurfaceCapabilitiesKHR caps = phdev.getSurfaceCapabilitiesKHR(surface);
+	new_width = std::clamp(new_width, int(caps.minImageExtent.width), int(caps.maxImageExtent.width));
+	new_height = std::clamp(new_height, int(caps.minImageExtent.height), int(caps.maxImageExtent.height));
+
+	device.waitIdle();
+
+	vk::Extent2D new_extent = { uint32_t(new_width), uint32_t(new_height) };
+	littlevk::resize(device, swapchain, new_extent);
+	window->extent = new_extent;
+}
+
+inline float Skeleton::aspect_ratio() const
+{
+	return (float) window->extent.width / (float) window->extent.height;
 }
 
 // Vulkan buffer wrapper
@@ -1335,8 +1374,8 @@ inline uint32_t find_memory_type(const vk::PhysicalDeviceMemoryProperties &mem_p
 	}
 
 	if (type_index == uint32_t(~0)) {
-		// KOBRA_LOG_FUNC(Log::ERROR) << "No memory type found\n";
-		throw std::runtime_error("[Vulkan] No memory type found");
+		microlog::error("find_memory_type", "No memory type found\n");
+		return -1;
 	}
 
 	return type_index;
@@ -1415,12 +1454,8 @@ inline void upload(const vk::Device &device, const Buffer &buffer, const std::ve
 
         // Warn if fewer elements were transferred
         // TODO: or return some kind of error code?
-        if (size < vec.size() * sizeof(T)) {
-		std::cout << "Fewer elements were transferred than"
-			<< " may have been expected: "
-			<< size << "/" << vec.size() * sizeof(T)
-			<< " bytes were transferred\n";
-        }
+        if (size < vec.size() * sizeof(T))
+		microlog::warning("upload", "Fewer elements were transferred than may have been expected");
 }
 
 template <typename T, size_t N>
@@ -1432,12 +1467,8 @@ inline void upload(const vk::Device &device, const Buffer &buffer, const std::ar
 	device.unmapMemory(buffer.memory);
 
 	// Warn if fewer elements were transferred
-	if (size < N * sizeof(T)) {
-		std::cout << "Fewer elements were transferred than"
-			<< " may have been expected: "
-			<< size << "/" << arr.size() * sizeof(T)
-			<< " bytes were transferred\n";
-	}
+	if (size < N * sizeof(T))
+		microlog::warning("upload", "Fewer elements were transferred than may have been expected");
 }
 
 inline void download(const vk::Device &device, const Buffer &buffer, void *data)

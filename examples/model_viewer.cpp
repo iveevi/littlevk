@@ -14,12 +14,14 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
+// TODO: pass from CMake
 #ifndef EXAMPLES_DIRETORY
-#define EXAMPLES_DIRECTORY "../examples"
+#define EXAMPLES_DIRECTORY ".."
 #endif
 
 // Argument parsing
 // TODO: plus a logging utility... (and mesh utility)
+// TODO: remove this...
 #include "argparser.hpp"
 
 // Vertex data
@@ -129,6 +131,7 @@ struct App : littlevk::Skeleton {
 	std::map <std::string, littlevk::Image> image_cache;
 };
 
+// TODO: just use a regular constructor...
 App make_app()
 {
 	App app;
@@ -551,6 +554,31 @@ int main(int argc, char *argv[])
 	glfwSetCursorPosCallback(app.window->handle, cursor_callback);
 	glfwSetScrollCallback(app.window->handle, scroll_callback);
 
+	// Resize callback
+	auto resize = [&]() {
+		app.resize();
+
+		// Recreate the depth buffer
+		littlevk::ImageCreateInfo depth_info {
+			app.window->extent.width,
+			app.window->extent.height,
+			vk::Format::eD32Sfloat,
+			vk::ImageUsageFlagBits::eDepthStencilAttachment,
+			vk::ImageAspectFlagBits::eDepth,
+		};
+
+		littlevk::Image depth_buffer = littlevk::image(
+			app.device,
+			depth_info, app.memory_properties
+		).unwrap(app.deallocator);
+
+		// Rebuid the framebuffers
+		fb_info.depth_buffer = &depth_buffer.view;
+		fb_info.extent = app.window->extent;
+
+		framebuffers = littlevk::framebuffers(app.device, fb_info).unwrap(app.deallocator);
+	};
+
 	// Render loop
         uint32_t frame = 0;
         while (true) {
@@ -576,7 +604,11 @@ int main(int argc, char *argv[])
 
 		// Rendering
 		littlevk::SurfaceOperation op;
-                op = littlevk::acquire_image(app.device, app.swapchain.swapchain, sync, frame);
+                op = littlevk::acquire_image(app.device, app.swapchain.swapchain, sync[frame]);
+		if (op.status == littlevk::SurfaceOperation::eResize) {
+			resize();
+			continue;
+		}
 
 		// Start empty render pass
 		std::array <vk::ClearValue, 2> clear_values {
@@ -638,10 +670,11 @@ int main(int argc, char *argv[])
 
 		app.graphics_queue.submit(submit_info, sync.in_flight[frame]);
 
-                op = littlevk::present_image(app.present_queue, app.swapchain.swapchain, sync, op.index);
+                op = littlevk::present_image(app.present_queue, app.swapchain.swapchain, sync[frame], op.index);
+		if (op.status == littlevk::SurfaceOperation::eResize)
+			resize();
 
 		frame = 1 - frame;
-		// TODO: resize function
         }
 
 	destroy_app(app);
