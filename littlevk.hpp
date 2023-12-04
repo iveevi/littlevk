@@ -556,12 +556,17 @@ struct Swapchain {
 	std::vector <vk::Image> images;
 	std::vector <vk::ImageView> image_views;
 	vk::SwapchainCreateInfoKHR info;
+
+	vk::SwapchainKHR operator*() const {
+		return swapchain;
+	}
 };
 
 // Pick a surface format
 inline vk::SurfaceFormatKHR pick_surface_format(const vk::PhysicalDevice &phdev, const vk::SurfaceKHR &surface)
 {
 	// Constant formats
+	// TODO: add more flexibility
 	static const std::vector <vk::SurfaceFormatKHR> target_formats = {
 		{ vk::Format::eB8G8R8A8Unorm, vk::ColorSpaceKHR::eSrgbNonlinear },
 	};
@@ -582,7 +587,7 @@ inline vk::SurfaceFormatKHR pick_surface_format(const vk::PhysicalDevice &phdev,
 		if (std::find_if(target_formats.begin(), target_formats.end(),
 				[&format](const vk::SurfaceFormatKHR &target) {
 					return format.format == target.format &&
-							format.colorSpace == target.colorSpace;
+						format.colorSpace == target.colorSpace;
 				}) != target_formats.end()) {
 			return format;
 		}
@@ -687,8 +692,10 @@ inline Swapchain swapchain(const vk::PhysicalDevice &phdev,
                 surface_format.colorSpace,
                 swapchain_extent,
                 1,
+		// TODO: pass these as options
                 vk::ImageUsageFlagBits::eColorAttachment
-                        | vk::ImageUsageFlagBits::eTransferSrc,
+                        | vk::ImageUsageFlagBits::eTransferSrc
+			| vk::ImageUsageFlagBits::eTransferDst,
                 vk::SharingMode::eExclusive,
                 {},
                 transform,
@@ -1061,7 +1068,7 @@ struct RenderArea {
 	RenderArea() = delete;
 	RenderArea(const Window *window) : extent(window->extent) {}
 };
-	
+
 inline void viewport_and_scissor(const vk::CommandBuffer &cmd, const RenderArea &area)
 {
 	vk::Viewport viewport {
@@ -1171,11 +1178,15 @@ inline SurfaceOperation acquire_image(const vk::Device &device,
 
 inline SurfaceOperation present_image(const vk::Queue &queue,
                 const vk::SwapchainKHR &swapchain,
-                const PresentSyncronization::Frame &sync_frame,
+                const std::optional <PresentSyncronization::Frame> &sync_frame,
                 uint32_t index)
 {
+	std::vector <vk::Semaphore> wait_semaphores;
+	if (sync_frame)
+		wait_semaphores.push_back(sync_frame->render_finished);
+
         vk::PresentInfoKHR present_info {
-                sync_frame.render_finished,
+		wait_semaphores,
                 swapchain,
                 index
         };
@@ -1368,10 +1379,14 @@ inline float Skeleton::aspect_ratio() const
 struct Buffer {
         vk::Buffer buffer;
         vk::DeviceMemory memory;
-        vk::MemoryRequirements requirements;
+        vk::MemoryRequirements requirements = {};
 
 	vk::Buffer operator*() const {
 		return buffer;
+	}
+
+	vk::DeviceSize device_size() const {
+		return requirements.size;
 	}
 };
 
@@ -1526,6 +1541,10 @@ struct Image {
 	vk::Image operator*() const {
 		return image;
 	}
+
+	vk::DeviceSize deivce_size() const {
+		return requirements.size;
+	}
 };
 
 // Return proxy for images
@@ -1593,11 +1612,15 @@ inline ImageReturnProxy image(const vk::Device &device, const ImageCreateInfo &i
         return image;
 }
 
+// TODO: pure template version that skips switch statements
+template <typename ImageType>
 inline void transition(const vk::CommandBuffer &cmd,
-		const Image &image,
+		const ImageType &image,
 		const vk::ImageLayout old_layout,
 		const vk::ImageLayout new_layout)
 {
+	static_assert(std::is_same_v <ImageType, Image> || std::is_same_v <ImageType, vk::Image>, "littlevk::transition: ImageType must be either littlevk::Image or vk::Image");
+
 	// Source stage
 	vk::AccessFlags src_access_mask = {};
 
@@ -1720,11 +1743,18 @@ inline void transition(const vk::CommandBuffer &cmd,
 		0, 1, 0, 1
 	};
 
+	vk::Image target_image;
+	if constexpr (std::is_same_v <ImageType, littlevk::Image>)
+		target_image = *image;
+	else
+		target_image = image;
+
 	vk::ImageMemoryBarrier barrier {
 		src_access_mask, dst_access_mask,
 		old_layout, new_layout,
 		VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-		*image, image_subresource_range
+		target_image,
+		image_subresource_range
 	};
 
 	// Add the barrier
@@ -1733,9 +1763,30 @@ inline void transition(const vk::CommandBuffer &cmd,
 
 // Copying buffer to image
 static void copy_buffer_to_image(const vk::CommandBuffer &cmd,
+		const vk::Image &image, const Buffer &buffer,
+		const vk::Extent2D &extent,
+		const vk::ImageLayout &layout)
+{
+	// TODO: ensure same sizes...,
+	// TODO: pass format as well...
+	vk::BufferImageCopy region {
+		0, 0, 0,
+		vk::ImageSubresourceLayers {
+			vk::ImageAspectFlagBits::eColor,
+			0, 0, 1
+		},
+		vk::Offset3D { 0, 0, 0 },
+		vk::Extent3D { extent.width, extent.height, 1 }
+	};
+
+	cmd.copyBufferToImage(*buffer, image, layout, region);
+}
+
+static void copy_buffer_to_image(const vk::CommandBuffer &cmd,
 		const Image &image, const Buffer &buffer,
 		const vk::ImageLayout &layout)
 {
+	// TODO: ensure same sizes...,
 	vk::BufferImageCopy region {
 		0, 0, 0,
 		vk::ImageSubresourceLayers {
