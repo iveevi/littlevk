@@ -107,6 +107,19 @@ inline void info(const char *header, const char *format, ...)
 	va_end(args);
 }
 
+inline void assertion(bool cond, const char *header, const char *format, ...)
+{
+	if (!cond) {
+		printf("%s[littlevk::assert]%s (%s) ",
+			colors::error, colors::reset, header);
+
+		va_list args;
+		va_start(args, format);
+		vprintf(format, args);
+		va_end(args);
+	}
+}
+
 }
 
 namespace littlevk {
@@ -626,8 +639,9 @@ inline vk::PresentModeKHR pick_present_mode(const vk::PhysicalDevice &phdev, con
 	}
 
 	// If none found, throw an error
-	// KOBRA_LOG_FUNC(Log::ERROR) << "No supported present mode found\n";
-	throw std::runtime_error("[Vulkan] No supported present mode found");
+	microlog::assertion(false, "vulkan", "No supported present mode found");
+
+	return vk::PresentModeKHR::eFifo;
 }
 
 // Swapchain allocation and destruction
@@ -637,6 +651,7 @@ inline Swapchain swapchain(const vk::PhysicalDevice &phdev,
                 const vk::SurfaceKHR &surface,
                 const vk::Extent2D &extent,
                 const QueueFamilyIndices &indices,
+		const std::optional <vk::PresentModeKHR> &priority_mode = std::nullopt,
                 const vk::SwapchainKHR *old_swapchain = nullptr)
 {
 	Swapchain swapchain;
@@ -681,7 +696,8 @@ inline Swapchain swapchain(const vk::PhysicalDevice &phdev,
                 vk::CompositeAlphaFlagBitsKHR::ePreMultiplied;
 
         // Present mode
-        vk::PresentModeKHR present_mode = pick_present_mode(phdev, surface);
+        vk::PresentModeKHR present_mode = priority_mode ? *priority_mode : pick_present_mode(phdev, surface);
+	microlog::info("vulkan", "Picked present mode %s for swapchain\n", vk::to_string(present_mode).c_str());
 
         // Creation info
         swapchain.info = vk::SwapchainCreateInfoKHR {
@@ -748,10 +764,8 @@ inline void resize(const vk::Device &device,
 
 	device.destroySwapchainKHR(swapchain.swapchain);
 
-	// We simply need to modify the swapchain info
-	// and rebuild it
+	// We simply need to modify the swapchain info and rebuild it
 	swapchain.info.imageExtent = extent;
-
 	swapchain.swapchain = device.createSwapchainKHR(swapchain.info);
 	swapchain.images = device.getSwapchainImagesKHR(swapchain.swapchain);
 
@@ -1254,7 +1268,8 @@ struct Skeleton {
 	// TODO: no default constructor, this turns into a constructor...
 	bool skeletonize(const vk::PhysicalDevice &,
                 const vk::Extent2D &,
-                const std::string &);
+                const std::string &,
+		const std::optional <vk::PresentModeKHR> & = std::nullopt);
 
 	// TODO: virtual destructor
 	virtual bool destroy();
@@ -1306,7 +1321,8 @@ inline vk::Device device(const vk::PhysicalDevice &phdev,
 
 inline bool Skeleton::skeletonize(const vk::PhysicalDevice &phdev_,
                 const vk::Extent2D &extent,
-                const std::string &title)
+                const std::string &title,
+		const std::optional <vk::PresentModeKHR> &priority_present_mode)
 {
         // Extensions for the application
         static const std::vector <const char *> device_extensions = {
@@ -1321,7 +1337,8 @@ inline bool Skeleton::skeletonize(const vk::PhysicalDevice &phdev_,
         device = littlevk::device(phdev, queue_family, device_extensions);
 	swapchain = littlevk::swapchain(
                 phdev, device, surface,
-                window->extent, queue_family
+                window->extent, queue_family,
+		priority_present_mode
 	);
 
         graphics_queue = device.getQueue(queue_family.graphics, 0);
@@ -1416,13 +1433,13 @@ inline uint32_t find_memory_type(const vk::PhysicalDeviceMemoryProperties &mem_p
 
 	if (type_index == uint32_t(~0)) {
 		microlog::error("find_memory_type", "No memory type found\n");
-		return -1;
+		return std::numeric_limits <uint32_t> ::max();
 	}
 
 	return type_index;
 }
 
-inline BufferReturnProxy buffer(const vk::Device &device, size_t size, const vk::BufferUsageFlagBits &flags, const vk::PhysicalDeviceMemoryProperties &properties)
+inline BufferReturnProxy buffer(const vk::Device &device, size_t size, const vk::BufferUsageFlags &flags, const vk::PhysicalDeviceMemoryProperties &properties)
 {
 	// TODO: usage flags as well...
         Buffer buffer;
@@ -1452,7 +1469,7 @@ inline BufferReturnProxy buffer(const vk::Device &device, size_t size, const vk:
 using FilledBufferReturnProxy = ComposedReturnProxy <Buffer>;
 
 template <typename T>
-inline FilledBufferReturnProxy buffer(const vk::Device &device, const std::vector <T> &vec, const vk::BufferUsageFlagBits &flags, const vk::PhysicalDeviceMemoryProperties &properties)
+inline FilledBufferReturnProxy buffer(const vk::Device &device, const std::vector <T> &vec, const vk::BufferUsageFlags &flags, const vk::PhysicalDeviceMemoryProperties &properties)
 {
 	DeallocationQueue dq;
 	Buffer buffer = littlevk::buffer(device,
@@ -1465,7 +1482,7 @@ inline FilledBufferReturnProxy buffer(const vk::Device &device, const std::vecto
 }
 
 template <typename T, size_t N>
-inline FilledBufferReturnProxy buffer(const vk::Device &device, const std::array <T, N> &vec, const vk::BufferUsageFlagBits &flags, const vk::PhysicalDeviceMemoryProperties &properties)
+inline FilledBufferReturnProxy buffer(const vk::Device &device, const std::array <T, N> &vec, const vk::BufferUsageFlags &flags, const vk::PhysicalDeviceMemoryProperties &properties)
 {
 	DeallocationQueue dq;
 	Buffer buffer = littlevk::buffer(device,
@@ -1798,6 +1815,42 @@ static void copy_buffer_to_image(const vk::CommandBuffer &cmd,
 	};
 
 	cmd.copyBufferToImage(*buffer, *image, layout, region);
+}
+
+// Copying image to buffer
+static void copy_image_to_buffer(const vk::CommandBuffer &cmd,
+		const vk::Image &image, const Buffer &buffer,
+		const vk::Extent2D &extent,
+		const vk::ImageLayout &layout)
+{
+	vk::BufferImageCopy region {
+		0, 0, 0,
+		vk::ImageSubresourceLayers {
+			vk::ImageAspectFlagBits::eColor,
+			0, 0, 1
+		},
+		vk::Offset3D { 0, 0, 0 },
+		vk::Extent3D { extent.width, extent.height, 1 }
+	};
+
+	cmd.copyImageToBuffer(image, layout, *buffer, region);
+}
+
+static void copy_image_to_buffer(const vk::CommandBuffer &cmd,
+		const Image &image, const Buffer &buffer,
+		const vk::ImageLayout &layout)
+{
+	vk::BufferImageCopy region {
+		0, 0, 0,
+		vk::ImageSubresourceLayers {
+			vk::ImageAspectFlagBits::eColor,
+			0, 0, 1
+		},
+		vk::Offset3D { 0, 0, 0 },
+		vk::Extent3D { image.extent.width, image.extent.height, 1 }
+	};
+
+	cmd.copyImageToBuffer(*image, layout, *buffer, region);
 }
 
 // Binding resources to descriptor sets
