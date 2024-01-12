@@ -20,6 +20,7 @@
 // Vulkan and GLFW
 // TODO: suppor other window apis later
 #include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan_core.h>
 #include <vulkan/vulkan_enums.hpp>
 #include <vulkan/vulkan_handles.hpp>
 #include <vulkan/vulkan_structs.hpp>
@@ -28,38 +29,7 @@
 // Glslang and SPIRV-Tools
 #include <glslang/SPIRV/GlslangToSpv.h>
 #include <glslang/Public/ResourceLimits.h>
-
-// Loading Vulkan extensions
-// TODO: note to users that this is being done...
-static PFN_vkCreateDebugUtilsMessengerEXT __vkCreateDebugUtilsMessengerEXT = 0;
-static PFN_vkDestroyDebugUtilsMessengerEXT __vkDestroyDebugUtilsMessengerEXT = 0;
-
-inline VKAPI_ATTR VkResult VKAPI_CALL
-vkCreateDebugUtilsMessengerEXT(VkInstance instance,
-		const VkDebugUtilsMessengerCreateInfoEXT *create_info,
-		const VkAllocationCallbacks *allocator,
-		VkDebugUtilsMessengerEXT *debug_messenger)
-{
-	if (!__vkCreateDebugUtilsMessengerEXT) {
-		__vkCreateDebugUtilsMessengerEXT = (PFN_vkCreateDebugUtilsMessengerEXT)
-			vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
-	}
-
-	return __vkCreateDebugUtilsMessengerEXT(instance, create_info, allocator, debug_messenger);
-}
-
-inline VKAPI_ATTR void VKAPI_CALL
-vkDestroyDebugUtilsMessengerEXT(VkInstance instance,
-		VkDebugUtilsMessengerEXT debug_messenger,
-		const VkAllocationCallbacks *allocator)
-{
-	if (!__vkDestroyDebugUtilsMessengerEXT) {
-		__vkDestroyDebugUtilsMessengerEXT = (PFN_vkDestroyDebugUtilsMessengerEXT)
-			vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
-	}
-
-	__vkDestroyDebugUtilsMessengerEXT(instance, debug_messenger, allocator);
-}
+#include <glslang/Public/ShaderLang.h>
 
 // Logging
 // TODO: put in static global namespace
@@ -120,6 +90,63 @@ inline void assertion(bool cond, const char *header, const char *format, ...)
 	}
 }
 
+}
+
+// Loading Vulkan extensions
+// TODO: note to users that this is being done...
+static PFN_vkCreateDebugUtilsMessengerEXT  __vkCreateDebugUtilsMessengerEXT = 0;
+static PFN_vkDestroyDebugUtilsMessengerEXT __vkDestroyDebugUtilsMessengerEXT = 0;
+static PFN_vkCmdDrawMeshTasksEXT           __vkCmdDrawMeshTasksEXT = 0;
+
+inline VKAPI_ATTR VkResult VKAPI_CALL
+vkCreateDebugUtilsMessengerEXT
+(
+		VkInstance instance,
+		const VkDebugUtilsMessengerCreateInfoEXT *create_info,
+		const VkAllocationCallbacks *allocator,
+		VkDebugUtilsMessengerEXT *debug_messenger
+)
+{
+	if (!__vkCreateDebugUtilsMessengerEXT) {
+		__vkCreateDebugUtilsMessengerEXT = (PFN_vkCreateDebugUtilsMessengerEXT)
+			vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
+	}
+
+	return __vkCreateDebugUtilsMessengerEXT(instance, create_info, allocator, debug_messenger);
+}
+
+inline VKAPI_ATTR void VKAPI_CALL
+vkDestroyDebugUtilsMessengerEXT
+(
+		VkInstance instance,
+		VkDebugUtilsMessengerEXT debug_messenger,
+		const VkAllocationCallbacks *allocator
+)
+{
+	if (!__vkDestroyDebugUtilsMessengerEXT) {
+		__vkDestroyDebugUtilsMessengerEXT = (PFN_vkDestroyDebugUtilsMessengerEXT)
+			vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
+	}
+
+	__vkDestroyDebugUtilsMessengerEXT(instance, debug_messenger, allocator);
+}
+
+
+inline VKAPI_ATTR void VKAPI_CALL
+vkCmdDrawMeshTasksEXT
+(
+		VkCommandBuffer commandBuffer,
+		uint32_t groupCountX,
+		uint32_t groupCountY,
+		uint32_t groupCountZ
+)
+{
+	if (!__vkCmdDrawMeshTasksEXT) {
+		microlog::error("vkCmdDrawMeshTasksEXT", "Null function address\n");
+		abort();
+	}
+
+	__vkCmdDrawMeshTasksEXT(commandBuffer, groupCountX, groupCountY, groupCountZ);
 }
 
 namespace littlevk {
@@ -355,9 +382,6 @@ static struct debug_messenger_singleton {
 // Get (or create) the singleton instance
 inline const vk::Instance &get_vulkan_instance()
 {
-	// static bool initialized = false;
-	// static vk::Instance instance;
-
 	// TODO: from config...
 	static vk::ApplicationInfo app_info {
 		"LittleVk",
@@ -370,7 +394,6 @@ inline const vk::Instance &get_vulkan_instance()
 	// Skip if already initialized
 	if (global_instance.initialized)
 		return global_instance.instance;
-		// return instance;
 
 	// Make sure GLFW is initialized
 	initialize_glfw();
@@ -390,7 +413,7 @@ inline const vk::Instance &get_vulkan_instance()
 	if (config()->enable_validation_layers) {
 		// Check if validation layers are available
 		if (!validation::check_validation_layer_support(validation_layers)) {
-			std::cerr << "Validation layers are not available" << std::endl;
+			microlog::error("instance initialization", "Validation layers are not available!\n");
 			config()->enable_validation_layers = false;
 		}
 
@@ -400,8 +423,6 @@ inline const vk::Instance &get_vulkan_instance()
 		}
 	}
 
-	// instance = vk::createInstance(instance_info);
-	// Instance::one() = vk::createInstance(instance_info);
 	global_instance.instance = vk::createInstance(instance_info);
 
 	if (config()->enable_validation_layers) {
@@ -418,28 +439,15 @@ inline const vk::Instance &get_vulkan_instance()
 			validation::debug_logger
 		};
 
-		// TODO: deallocation queue...
-		// struct DebugMessengerWrapper {
-		// 	vk::Instance instance;
-		// 	vk::DebugUtilsMessengerEXT debug_messenger;
-		//
-		// 	~DebugMessengerWrapper()
-		// 	{
-		// 		instance.destroyDebugUtilsMessengerEXT(debug_messenger);
-		// 	}
-		// };
-
-		// auto debug_messenger = instance.createDebugUtilsMessengerEXT(debug_messenger_info);
-		// static DebugMessengerWrapper wrapper { instance, debug_messenger };
-		// auto debug_messenger = global_instance.instance.createDebugUtilsMessengerEXT(debug_messenger_info);
-		// static DebugMessengerWrapper wrapper { global_instance.instance, debug_messenger };
-
 		global_messenger.messenger = global_instance.instance.createDebugUtilsMessengerEXT(debug_messenger_info);
 		global_messenger.initialized = true;
 	}
 
 	global_instance.initialized = true;
-	// return instance;
+
+	// Post initialization; load extensions
+	__vkCmdDrawMeshTasksEXT = (PFN_vkCmdDrawMeshTasksEXT) vkGetInstanceProcAddr(global_instance.instance, "vkCmdDrawMeshTasksEXT");
+
 	return global_instance.instance;
 }
 
@@ -1269,6 +1277,7 @@ struct Skeleton {
 	bool skeletonize(const vk::PhysicalDevice &,
                 const vk::Extent2D &,
                 const std::string &,
+		const std::optional <vk::PhysicalDeviceFeatures2KHR> & = std::nullopt,
 		const std::optional <vk::PresentModeKHR> & = std::nullopt);
 
 	// TODO: virtual destructor
@@ -1282,7 +1291,8 @@ struct Skeleton {
 inline vk::Device device(const vk::PhysicalDevice &phdev,
 		const uint32_t queue_family,
 		const uint32_t queue_count,
-		const std::vector <const char *> &extensions)
+		const std::vector <const char *> &extensions,
+		const std::optional <vk::PhysicalDeviceFeatures2KHR> &features = {})
 {
 	// Queue priorities
 	std::vector <float> queue_priorities(queue_count, 1.0f);
@@ -1298,13 +1308,19 @@ inline vk::Device device(const vk::PhysicalDevice &phdev,
 	vk::PhysicalDeviceFeatures device_features;
 	device_features.independentBlend = true;
 	device_features.fillModeNonSolid = true;
-        device_features.geometryShader = true;
+	device_features.geometryShader = true;
 
-	// Create the device
+	vk::PhysicalDeviceFeatures2KHR secondary_features;
 	vk::DeviceCreateInfo device_info {
 		vk::DeviceCreateFlags(), queue_info,
 		{}, extensions, &device_features, nullptr
 	};
+
+	if (features) {
+		secondary_features = *features;
+		device_info.pNext = &secondary_features;
+		device_info.pEnabledFeatures = nullptr;
+	}
 
 	return phdev.createDevice(device_info);
 }
@@ -1312,21 +1328,28 @@ inline vk::Device device(const vk::PhysicalDevice &phdev,
 // Create a logical device
 inline vk::Device device(const vk::PhysicalDevice &phdev,
 		const QueueFamilyIndices &indices,
-		const std::vector <const char *> &extensions)
+		const std::vector <const char *> &extensions,
+		const std::optional <vk::PhysicalDeviceFeatures2KHR> &features = {})
 {
 	auto families = phdev.getQueueFamilyProperties();
 	uint32_t count = families[indices.graphics].queueCount;
-	return device(phdev, indices.graphics, count, extensions);
+	return device(phdev, indices.graphics, count, extensions, features);
 }
 
-inline bool Skeleton::skeletonize(const vk::PhysicalDevice &phdev_,
+// TODO: pass extensions
+inline bool Skeleton::skeletonize
+(
+		const vk::PhysicalDevice &phdev_,
                 const vk::Extent2D &extent,
                 const std::string &title,
-		const std::optional <vk::PresentModeKHR> &priority_present_mode)
+		const std::optional <vk::PhysicalDeviceFeatures2KHR> &features,
+		const std::optional <vk::PresentModeKHR> &priority_present_mode
+)
 {
         // Extensions for the application
         static const std::vector <const char *> device_extensions = {
-                VK_KHR_SWAPCHAIN_EXTENSION_NAME
+                VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+		VK_EXT_MESH_SHADER_EXTENSION_NAME,
         };
 
         phdev = phdev_;
@@ -1334,7 +1357,7 @@ inline bool Skeleton::skeletonize(const vk::PhysicalDevice &phdev_,
         surface = make_surface(*window);
 
         QueueFamilyIndices queue_family = find_queue_families(phdev, surface);
-        device = littlevk::device(phdev, queue_family, device_extensions);
+        device = littlevk::device(phdev, queue_family, device_extensions, features);
 	swapchain = littlevk::swapchain(
                 phdev, device, surface,
                 window->extent, queue_family,
@@ -2035,6 +2058,10 @@ inline EShLanguage translate_shader_stage(const vk::ShaderStageFlagBits &stage)
 		return EShLangFragment;
 	case vk::ShaderStageFlagBits::eCompute:
 		return EShLangCompute;
+	case vk::ShaderStageFlagBits::eTaskEXT:
+		return EShLangTask;
+	case vk::ShaderStageFlagBits::eMeshEXT:
+		return EShLangMesh;
 	case vk::ShaderStageFlagBits::eRaygenNV:
 		return EShLangRayGenNV;
 	case vk::ShaderStageFlagBits::eAnyHitNV:
@@ -2047,16 +2074,11 @@ inline EShLanguage translate_shader_stage(const vk::ShaderStageFlagBits &stage)
 		return EShLangIntersectNV;
 	case vk::ShaderStageFlagBits::eCallableNV:
 		return EShLangCallableNV;
-	case vk::ShaderStageFlagBits::eTaskNV:
-		return EShLangTaskNV;
-	case vk::ShaderStageFlagBits::eMeshNV:
-		return EShLangMeshNV;
 	default:
 		break;
 	}
 
-	// KOBRA_LOG_FUNC(Log::ERROR) << "Unknown shader stage: "
-	// 	<< vk::to_string(stage) << std::endl;
+	microlog::error("translate_shader_stage", "Unknown shader stage %s\n", vk::to_string(stage).c_str());
 
 	return EShLangVertex;
 }
@@ -2164,10 +2186,13 @@ static _compile_out glsl_to_spriv(const std::string &source,
 	shaderStrings[0] = source_copy.data();
 
 	glslang::TShader shader(stage);
+
+	// TODO: client as well later on
+	shader.setEnvTarget(glslang::EShTargetLanguage::EShTargetSpv, glslang::EShTargetLanguageVersion::EShTargetSpv_1_6);
 	shader.setStrings(shaderStrings, 1);
 
 	// Enable SPIR-V and Vulkan rules when parsing GLSL
-	EShMessages messages = (EShMessages) (EShMsgSpvRules | EShMsgVulkanRules);
+	EShMessages messages = (EShMessages) (EShMsgDefault | EShMsgSpvRules | EShMsgVulkanRules);
 
 	// ShaderIncluder includer;
 	if (!shader.parse(GetDefaultResources(), 450, false, messages)) {
@@ -2178,6 +2203,8 @@ static _compile_out glsl_to_spriv(const std::string &source,
 
 	// Link the program
 	glslang::TProgram program;
+
+	// program.s
 	program.addShader(&shader);
 
 	if (!program.link(messages)) {
@@ -2285,8 +2312,9 @@ struct GraphicsCreateInfo {
 	vk::VertexInputBindingDescription vertex_binding;
 	vk::ArrayProxy <vk::VertexInputAttributeDescription> vertex_attributes;
 
-	vk::ShaderModule vertex_shader;
-	vk::ShaderModule fragment_shader;
+	// vk::ShaderModule vertex_shader;
+	// vk::ShaderModule fragment_shader;
+	std::vector <vk::PipelineShaderStageCreateInfo> shader_stages;
 
 	vk::Extent2D extent;
 
@@ -2302,14 +2330,17 @@ struct GraphicsCreateInfo {
 
 inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreateInfo &info)
 {
-	vk::PipelineShaderStageCreateInfo shader_stages[] = {
-		vk::PipelineShaderStageCreateInfo {
-			{}, vk::ShaderStageFlagBits::eVertex, info.vertex_shader, "main"
-		},
-		vk::PipelineShaderStageCreateInfo {
-			{}, vk::ShaderStageFlagBits::eFragment, info.fragment_shader, "main"
-		}
-	};
+	if (!info.shader_stages.size())
+		microlog::error("pipeline::compile", "Empty shader stages\n");
+
+	// vk::PipelineShaderStageCreateInfo shader_stages[] = {
+	// 	vk::PipelineShaderStageCreateInfo {
+	// 		{}, vk::ShaderStageFlagBits::eVertex, info.vertex_shader, "main"
+	// 	},
+	// 	vk::PipelineShaderStageCreateInfo {
+	// 		{}, vk::ShaderStageFlagBits::eFragment, info.fragment_shader, "main"
+	// 	}
+	// };
 
 	vk::PipelineVertexInputStateCreateInfo vertex_input_info {
 		{}, info.vertex_binding, info.vertex_attributes
@@ -2402,7 +2433,7 @@ inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreat
 	return device.createGraphicsPipeline(nullptr,
 		vk::GraphicsPipelineCreateInfo {
 			{},
-			shader_stages,
+			info.shader_stages,
 			&vertex_input_info,
 			&input_assembly,
 			nullptr,
