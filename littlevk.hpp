@@ -2427,8 +2427,8 @@ static void destroy_pipeline(const vk::Device &device, const vk::Pipeline &pipel
 using PipelineReturnProxy = DeviceReturnProxy <vk::Pipeline, destroy_pipeline>;
 
 struct GraphicsCreateInfo {
-	vk::VertexInputBindingDescription vertex_binding;
-	vk::ArrayProxy <vk::VertexInputAttributeDescription> vertex_attributes;
+	std::optional <vk::VertexInputBindingDescription> vertex_binding = std::nullopt;
+	std::optional <vk::ArrayProxy <vk::VertexInputAttributeDescription>> vertex_attributes = std::nullopt;
 
 	// vk::ShaderModule vertex_shader;
 	// vk::ShaderModule fragment_shader;
@@ -2451,18 +2451,9 @@ inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreat
 	if (!info.shader_stages.size())
 		microlog::error("pipeline::compile", "Empty shader stages\n");
 
-	// vk::PipelineShaderStageCreateInfo shader_stages[] = {
-	// 	vk::PipelineShaderStageCreateInfo {
-	// 		{}, vk::ShaderStageFlagBits::eVertex, info.vertex_shader, "main"
-	// 	},
-	// 	vk::PipelineShaderStageCreateInfo {
-	// 		{}, vk::ShaderStageFlagBits::eFragment, info.fragment_shader, "main"
-	// 	}
-	// };
-
-	vk::PipelineVertexInputStateCreateInfo vertex_input_info {
-		{}, info.vertex_binding, info.vertex_attributes
-	};
+	vk::PipelineVertexInputStateCreateInfo vertex_input_info { {}, nullptr, nullptr };
+	if (info.vertex_binding && info.vertex_attributes)
+		vertex_input_info = { {}, *info.vertex_binding, *info.vertex_attributes };
 
 	vk::PipelineInputAssemblyStateCreateInfo input_assembly {
 		{}, vk::PrimitiveTopology::eTriangleList
