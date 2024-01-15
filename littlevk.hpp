@@ -32,7 +32,6 @@
 #include <glslang/Public/ShaderLang.h>
 
 // Logging
-// TODO: put in static global namespace
 namespace microlog {
 
 // Colors and formatting
@@ -147,6 +146,105 @@ vkCmdDrawMeshTasksEXT
 	}
 
 	__vkCmdDrawMeshTasksEXT(commandBuffer, groupCountX, groupCountY, groupCountZ);
+}
+
+// Standalone utils, imported from other sources
+namespace standalone {
+
+// NOTE: From the glslang project
+// Default include class for normal include convention of search backward
+// through the stack of active include paths (for nested includes).
+// Can be overridden to customize.
+class DirStackFileIncluder : public glslang::TShader::Includer {
+public:
+	DirStackFileIncluder() : externalLocalDirectoryCount(0) { }
+
+	IncludeResult* includeLocal(const char* headerName,
+			const char* includerName,
+			size_t inclusionDepth) override {
+		return readLocalPath(headerName, includerName, (int)inclusionDepth);
+	}
+
+	IncludeResult* includeSystem(const char* headerName,
+			const char* /*includerName*/,
+			size_t /*inclusionDepth*/) override {
+		return readSystemPath(headerName);
+	}
+
+	// Externally set directories. E.g., from a command-line -I<dir>.
+	//  - Most-recently pushed are checked first.
+	//  - All these are checked after the parse-time stack of local directories
+	//    is checked.
+	//  - This only applies to the "local" form of #include.
+	//  - Makes its own copy of the path.
+	void pushExternalLocalDirectory(const std::string& dir) {
+		directoryStack.push_back(dir);
+		externalLocalDirectoryCount = (int)directoryStack.size();
+	}
+
+	void releaseInclude(IncludeResult* result) override {
+		if (result != nullptr) {
+			delete [] static_cast<tUserDataElement*>(result->userData);
+			delete result;
+		}
+	}
+
+	std::set<std::string> getIncludedFiles() {
+		return includedFiles;
+	}
+protected:
+	typedef char tUserDataElement;
+	std::vector<std::string> directoryStack;
+	int externalLocalDirectoryCount;
+	std::set<std::string> includedFiles;
+
+	// Search for a valid "local" path based on combining the stack of include
+	// directories and the nominal name of the header.
+	IncludeResult* readLocalPath(const char* headerName, const char* includerName, int depth) {
+		// Discard popped include directories, and
+		// initialize when at parse-time first level.
+		directoryStack.resize(depth + externalLocalDirectoryCount);
+		if (depth == 1)
+			directoryStack.back() = getDirectory(includerName);
+
+		// Find a directory that works, using a reverse search of the include stack.
+		for (auto it = directoryStack.rbegin(); it != directoryStack.rend(); ++it) {
+			std::string path = *it + '/' + headerName;
+			std::replace(path.begin(), path.end(), '\\', '/');
+			std::ifstream file(path, std::ios_base::binary | std::ios_base::ate);
+			if (file) {
+				directoryStack.push_back(getDirectory(path));
+				includedFiles.insert(path);
+				return newIncludeResult(path, file, (int)file.tellg());
+			}
+		}
+
+		return nullptr;
+	}
+
+	// Search for a valid <system> path.
+	// Not implemented yet; returning nullptr signals failure to find.
+	IncludeResult* readSystemPath(const char* /*headerName*/) const {
+		return nullptr;
+	}
+
+	// Do actual reading of the file, filling in a new include result.
+	IncludeResult* newIncludeResult(const std::string& path, std::ifstream& file, int length) const
+	{
+		char* content = new tUserDataElement [length];
+		file.seekg(0, file.beg);
+		file.read(content, length);
+		return new IncludeResult(path, content, length, content);
+	}
+
+	// If no path markers, return current working directory.
+	// Otherwise, strip file name and return path leading up to it.
+	std::string getDirectory(const std::string path) const {
+		size_t last = path.find_last_of("/\\");
+		return last == std::string::npos ? "." : path.substr(0, last);
+	}
+};
+
 }
 
 namespace littlevk {
@@ -1350,6 +1448,7 @@ inline bool Skeleton::skeletonize
         static const std::vector <const char *> device_extensions = {
                 VK_KHR_SWAPCHAIN_EXTENSION_NAME,
 		VK_EXT_MESH_SHADER_EXTENSION_NAME,
+		VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME,
         };
 
         phdev = phdev_;
@@ -1887,7 +1986,22 @@ inline void bind(const vk::Device &device, const vk::DescriptorSet &dset, const 
 	vk::WriteDescriptorSet write {
 		dset, 0, 0, 1,
 		vk::DescriptorType::eCombinedImageSampler,
-		&image_info, nullptr, nullptr
+		&image_info
+	};
+
+	device.updateDescriptorSets({ write }, {});
+}
+
+inline void bind(const vk::Device &device, const vk::DescriptorSet &dset, const Buffer &buffer, uint32_t binding)
+{
+	vk::DescriptorBufferInfo buffer_info {
+		*buffer, 0, vk::WholeSize
+	};
+
+	vk::WriteDescriptorSet write {
+		dset, binding, 0, 1,
+		vk::DescriptorType::eStorageBuffer,
+		{}, &buffer_info
 	};
 
 	device.updateDescriptorSets({ write }, {});
@@ -2174,7 +2288,7 @@ static _compile_out glsl_to_spriv(const std::string &source,
         std::set <std::string> include_paths = paths;
 
         // Get the directory of the source file
-	std::string source_copy = preprocess(source, defines, include_paths);
+	// std::string source_copy = preprocess(source, defines, include_paths);
 
 	// Output
 	_compile_out out;
@@ -2183,7 +2297,7 @@ static _compile_out glsl_to_spriv(const std::string &source,
 	EShLanguage stage = translate_shader_stage(shader_type);
 
 	const char *shaderStrings[1];
-	shaderStrings[0] = source_copy.data();
+	shaderStrings[0] = source.data();
 
 	glslang::TShader shader(stage);
 
@@ -2194,10 +2308,14 @@ static _compile_out glsl_to_spriv(const std::string &source,
 	// Enable SPIR-V and Vulkan rules when parsing GLSL
 	EShMessages messages = (EShMessages) (EShMsgDefault | EShMsgSpvRules | EShMsgVulkanRules);
 
+	// Include directories
+	standalone::DirStackFileIncluder includer;
+	includer.pushExternalLocalDirectory("../shaders");
+
 	// ShaderIncluder includer;
-	if (!shader.parse(GetDefaultResources(), 450, false, messages)) {
+	if (!shader.parse(GetDefaultResources(), 450, false, messages, includer)) {
 		out.log = shader.getInfoLog();
-		out.source = source_copy;
+		out.source = source;
 		return out;
 	}
 
