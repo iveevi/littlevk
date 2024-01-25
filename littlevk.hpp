@@ -96,57 +96,7 @@ inline void assertion(bool cond, const char *header, const char *format, ...)
 static PFN_vkCreateDebugUtilsMessengerEXT  __vkCreateDebugUtilsMessengerEXT = 0;
 static PFN_vkDestroyDebugUtilsMessengerEXT __vkDestroyDebugUtilsMessengerEXT = 0;
 static PFN_vkCmdDrawMeshTasksEXT           __vkCmdDrawMeshTasksEXT = 0;
-
-inline VKAPI_ATTR VkResult VKAPI_CALL
-vkCreateDebugUtilsMessengerEXT
-(
-		VkInstance instance,
-		const VkDebugUtilsMessengerCreateInfoEXT *create_info,
-		const VkAllocationCallbacks *allocator,
-		VkDebugUtilsMessengerEXT *debug_messenger
-)
-{
-	if (!__vkCreateDebugUtilsMessengerEXT) {
-		__vkCreateDebugUtilsMessengerEXT = (PFN_vkCreateDebugUtilsMessengerEXT)
-			vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
-	}
-
-	return __vkCreateDebugUtilsMessengerEXT(instance, create_info, allocator, debug_messenger);
-}
-
-inline VKAPI_ATTR void VKAPI_CALL
-vkDestroyDebugUtilsMessengerEXT
-(
-		VkInstance instance,
-		VkDebugUtilsMessengerEXT debug_messenger,
-		const VkAllocationCallbacks *allocator
-)
-{
-	if (!__vkDestroyDebugUtilsMessengerEXT) {
-		__vkDestroyDebugUtilsMessengerEXT = (PFN_vkDestroyDebugUtilsMessengerEXT)
-			vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
-	}
-
-	__vkDestroyDebugUtilsMessengerEXT(instance, debug_messenger, allocator);
-}
-
-
-inline VKAPI_ATTR void VKAPI_CALL
-vkCmdDrawMeshTasksEXT
-(
-		VkCommandBuffer commandBuffer,
-		uint32_t groupCountX,
-		uint32_t groupCountY,
-		uint32_t groupCountZ
-)
-{
-	if (!__vkCmdDrawMeshTasksEXT) {
-		microlog::error("vkCmdDrawMeshTasksEXT", "Null function address\n");
-		abort();
-	}
-
-	__vkCmdDrawMeshTasksEXT(commandBuffer, groupCountX, groupCountY, groupCountZ);
-}
+static PFN_vkCmdDrawMeshTasksNV            __vkCmdDrawMeshTasksNV = 0;
 
 // Standalone utils, imported from other sources
 namespace standalone {
@@ -545,6 +495,7 @@ inline const vk::Instance &get_vulkan_instance()
 
 	// Post initialization; load extensions
 	__vkCmdDrawMeshTasksEXT = (PFN_vkCmdDrawMeshTasksEXT) vkGetInstanceProcAddr(global_instance.instance, "vkCmdDrawMeshTasksEXT");
+	__vkCmdDrawMeshTasksNV  = (PFN_vkCmdDrawMeshTasksNV)  vkGetInstanceProcAddr(global_instance.instance, "vkCmdDrawMeshTasksNV");
 
 	return global_instance.instance;
 }
@@ -765,6 +716,7 @@ inline Swapchain swapchain(const vk::PhysicalDevice &phdev,
         // Pick a surface format
         auto surface_format = pick_surface_format(phdev, surface);
         swapchain.format = surface_format.format;
+	microlog::info("vulkan", "Picked format %s for swapchain\n", vk::to_string(swapchain.format).c_str());
 
         // Surface capabilities and extent
         vk::SurfaceCapabilitiesKHR capabilities = phdev.getSurfaceCapabilitiesKHR(surface);
@@ -2174,7 +2126,7 @@ inline EShLanguage translate_shader_stage(const vk::ShaderStageFlagBits &stage)
 		return EShLangCompute;
 	case vk::ShaderStageFlagBits::eTaskEXT:
 		return EShLangTask;
-	case vk::ShaderStageFlagBits::eMeshEXT:
+	case vk::ShaderStageFlagBits::eMeshNV:
 		return EShLangMesh;
 	case vk::ShaderStageFlagBits::eRaygenNV:
 		return EShLangRayGenNV;
@@ -2560,4 +2512,73 @@ inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreat
 
 } // namespace pipeline
 
+}
+
+// Extension wrappers
+inline VKAPI_ATTR VkResult VKAPI_CALL
+vkCreateDebugUtilsMessengerEXT
+(
+		VkInstance instance,
+		const VkDebugUtilsMessengerCreateInfoEXT *create_info,
+		const VkAllocationCallbacks *allocator,
+		VkDebugUtilsMessengerEXT *debug_messenger
+)
+{
+	if (!__vkCreateDebugUtilsMessengerEXT) {
+		__vkCreateDebugUtilsMessengerEXT = (PFN_vkCreateDebugUtilsMessengerEXT)
+			vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
+	}
+
+	return __vkCreateDebugUtilsMessengerEXT(instance, create_info, allocator, debug_messenger);
+}
+
+inline VKAPI_ATTR void VKAPI_CALL
+vkDestroyDebugUtilsMessengerEXT
+(
+		VkInstance instance,
+		VkDebugUtilsMessengerEXT debug_messenger,
+		const VkAllocationCallbacks *allocator
+)
+{
+	if (!__vkDestroyDebugUtilsMessengerEXT) {
+		__vkDestroyDebugUtilsMessengerEXT = (PFN_vkDestroyDebugUtilsMessengerEXT)
+			vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
+	}
+
+	__vkDestroyDebugUtilsMessengerEXT(instance, debug_messenger, allocator);
+}
+
+
+inline VKAPI_ATTR void VKAPI_CALL
+vkCmdDrawMeshTasksEXT
+(
+		VkCommandBuffer commandBuffer,
+		uint32_t groupCountX,
+		uint32_t groupCountY,
+		uint32_t groupCountZ
+)
+{
+	if (!__vkCmdDrawMeshTasksEXT) {
+		microlog::error("vkCmdDrawMeshTasksEXT", "Null function address\n");
+		abort();
+	}
+
+	__vkCmdDrawMeshTasksEXT(commandBuffer, groupCountX, groupCountY, groupCountZ);
+}
+
+inline VKAPI_ATTR void VKAPI_CALL
+vkCmdDrawMeshTasksNV
+(
+		VkCommandBuffer commandBuffer,
+		uint32_t taskCount,
+		uint32_t firstTask
+)
+{
+	// TODO: macro..
+	if (!__vkCmdDrawMeshTasksNV) {
+		microlog::error("vkCmdDrawMeshTasksNV", "Null function address\n");
+		abort();
+	}
+
+	__vkCmdDrawMeshTasksNV(commandBuffer, taskCount, firstTask);
 }
