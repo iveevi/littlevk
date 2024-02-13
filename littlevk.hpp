@@ -473,6 +473,20 @@ inline const vk::Instance &get_vulkan_instance()
 
 	global_instance.instance = vk::createInstance(instance_info);
 
+	// Post initialization; load extensions
+	__vkCreateDebugUtilsMessengerEXT = (PFN_vkCreateDebugUtilsMessengerEXT) vkGetInstanceProcAddr(global_instance.instance, "vkCreateDebugUtilsMessengerEXT");
+	__vkDestroyDebugUtilsMessengerEXT = (PFN_vkDestroyDebugUtilsMessengerEXT) vkGetInstanceProcAddr(global_instance.instance, "vkDestroyDebugUtilsMessengerEXT");
+
+	__vkCmdDrawMeshTasksEXT = (PFN_vkCmdDrawMeshTasksEXT) vkGetInstanceProcAddr(global_instance.instance, "vkCmdDrawMeshTasksEXT");
+	__vkCmdDrawMeshTasksNV  = (PFN_vkCmdDrawMeshTasksNV)  vkGetInstanceProcAddr(global_instance.instance, "vkCmdDrawMeshTasksNV");
+
+	// Ensure these are loaded properly
+	microlog::assertion(__vkCreateDebugUtilsMessengerEXT, "get_vulkan_instance", "Failed to load extension function: vkCreateDebugUtilsMessengerEXT\n");
+
+	// TODO: fill this in
+	microlog::info("get_vulkan_instance", "Loaded address %p for vkCreateDebugUtilsMessengerEXT\n", __vkCreateDebugUtilsMessengerEXT);
+
+	// Loading the debug messenger
 	if (config()->enable_validation_layers) {
 		// Create debug messenger
 		static constexpr vk::DebugUtilsMessengerCreateInfoEXT debug_messenger_info {
@@ -492,10 +506,6 @@ inline const vk::Instance &get_vulkan_instance()
 	}
 
 	global_instance.initialized = true;
-
-	// Post initialization; load extensions
-	__vkCmdDrawMeshTasksEXT = (PFN_vkCmdDrawMeshTasksEXT) vkGetInstanceProcAddr(global_instance.instance, "vkCmdDrawMeshTasksEXT");
-	__vkCmdDrawMeshTasksNV  = (PFN_vkCmdDrawMeshTasksNV)  vkGetInstanceProcAddr(global_instance.instance, "vkCmdDrawMeshTasksNV");
 
 	return global_instance.instance;
 }
@@ -2263,6 +2273,7 @@ static _compile_out glsl_to_spriv(const std::string &source,
 
 	// Include directories
 	standalone::DirStackFileIncluder includer;
+	// TODO: configure this later
 	includer.pushExternalLocalDirectory("../shaders");
 
 	// ShaderIncluder includer;
@@ -2542,11 +2553,11 @@ template <typename T, typename ... Args>
 constexpr std::array <vk::VertexInputAttributeDescription, 1 + sizeof...(Args)> attributes_for(uint32_t index, uint32_t offset)
 {
 	if constexpr (sizeof...(Args)) {
-		constexpr auto previous = attributes_for <Args...> (index + 1, offset + sizeof(T));
-		return {
-			attribute_for <T> (index, offset),
-			previous
-		};
+		auto previous = attributes_for <Args...> (index + 1, offset + sizeof(T));
+		std::array <vk::VertexInputAttributeDescription, 1 + sizeof...(Args)> out;
+		out[0] = attribute_for <T> (index, offset);
+		std::copy(previous.begin(), previous.end(), out.begin() + 1);
+		return out;
 	} else {	
 		return { attribute_for <T> (index, offset) };
 	}
@@ -2578,8 +2589,8 @@ struct ShaderStageBundle {
 	ShaderStageBundle(const vk::Device &device, littlevk::Deallocator *dal)
 			: device(device), dal(dal) {}
 
-	ShaderStageBundle &attach(const std::filesystem::path &path, vk::ShaderStageFlagBits flags) {
-		vk::ShaderModule module = littlevk::shader::compile(device, readfile(path), flags).unwrap(dal);
+	ShaderStageBundle &attach(const std::string &glsl, vk::ShaderStageFlagBits flags) {
+		vk::ShaderModule module = littlevk::shader::compile(device, glsl, flags).unwrap(dal);
 		stages.push_back({{}, flags, module, "main"});
 		return *this;
 	}
@@ -2653,9 +2664,9 @@ struct PipelineCompiler {
 
 }
 
+// Specializing for GLM types if defined
 #ifdef LITTLEVK_GLM_TRANSLATOR
 
-// Specializing for GLM types if defined
 template <>
 struct littlevk::type_translator <glm::vec2, true> {
 	static constexpr vk::Format format = vk::Format::eR32G32Sfloat;
@@ -2673,11 +2684,7 @@ vkCreateDebugUtilsMessengerEXT
 		VkDebugUtilsMessengerEXT *debug_messenger
 )
 {
-	if (!__vkCreateDebugUtilsMessengerEXT) {
-		__vkCreateDebugUtilsMessengerEXT = (PFN_vkCreateDebugUtilsMessengerEXT)
-			vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
-	}
-
+	microlog::assertion(__vkCreateDebugUtilsMessengerEXT, "vkCreateDebugUtilsMessengerEXT", "Null function address\n");
 	return __vkCreateDebugUtilsMessengerEXT(instance, create_info, allocator, debug_messenger);
 }
 
@@ -2689,11 +2696,7 @@ vkDestroyDebugUtilsMessengerEXT
 		const VkAllocationCallbacks *allocator
 )
 {
-	if (!__vkDestroyDebugUtilsMessengerEXT) {
-		__vkDestroyDebugUtilsMessengerEXT = (PFN_vkDestroyDebugUtilsMessengerEXT)
-			vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
-	}
-
+	microlog::assertion(__vkDestroyDebugUtilsMessengerEXT, "vkDestroyDebugUtilsMessengerEXT", "Null function address\n");
 	__vkDestroyDebugUtilsMessengerEXT(instance, debug_messenger, allocator);
 }
 
@@ -2707,11 +2710,7 @@ vkCmdDrawMeshTasksEXT
 		uint32_t groupCountZ
 )
 {
-	if (!__vkCmdDrawMeshTasksEXT) {
-		microlog::error("vkCmdDrawMeshTasksEXT", "Null function address\n");
-		abort();
-	}
-
+	microlog::assertion(__vkCmdDrawMeshTasksEXT, "vkCmdDrawMeshTasksEXT", "Null function address\n");
 	__vkCmdDrawMeshTasksEXT(commandBuffer, groupCountX, groupCountY, groupCountZ);
 }
 
@@ -2723,11 +2722,6 @@ vkCmdDrawMeshTasksNV
 		uint32_t firstTask
 )
 {
-	// TODO: macro..
-	if (!__vkCmdDrawMeshTasksNV) {
-		microlog::error("vkCmdDrawMeshTasksNV", "Null function address\n");
-		abort();
-	}
-
+	microlog::assertion(__vkCmdDrawMeshTasksNV, "vkCmdDrawMeshTasksNV", "Null function address\n");
 	__vkCmdDrawMeshTasksNV(commandBuffer, taskCount, firstTask);
 }
