@@ -1324,11 +1324,15 @@ struct Skeleton {
         Window *window = nullptr;
 
 	// TODO: no default constructor, this turns into a constructor...
-	bool skeletonize(const vk::PhysicalDevice &,
+	bool skeletonize
+	(
+		const vk::PhysicalDevice &,
                 const vk::Extent2D &,
                 const std::string &,
+		const std::vector <const char *> &,
 		const std::optional <vk::PhysicalDeviceFeatures2KHR> & = std::nullopt,
-		const std::optional <vk::PresentModeKHR> & = std::nullopt);
+		const std::optional <vk::PresentModeKHR> & = std::nullopt
+	);
 
 	// TODO: virtual destructor
 	virtual bool destroy();
@@ -1338,11 +1342,14 @@ struct Skeleton {
 };
 
 // Create logical device on an arbitrary queue
-inline vk::Device device(const vk::PhysicalDevice &phdev,
+inline vk::Device device
+(
+		const vk::PhysicalDevice &phdev,
 		const uint32_t queue_family,
 		const uint32_t queue_count,
 		const std::vector <const char *> &extensions,
-		const std::optional <vk::PhysicalDeviceFeatures2KHR> &features = {})
+		const std::optional <vk::PhysicalDeviceFeatures2KHR> &features = {}
+)
 {
 	// Queue priorities
 	std::vector <float> queue_priorities(queue_count, 1.0f);
@@ -1392,17 +1399,11 @@ inline bool Skeleton::skeletonize
 		const vk::PhysicalDevice &phdev_,
                 const vk::Extent2D &extent,
                 const std::string &title,
+		const std::vector <const char *> &device_extensions,
 		const std::optional <vk::PhysicalDeviceFeatures2KHR> &features,
 		const std::optional <vk::PresentModeKHR> &priority_present_mode
 )
 {
-        // Extensions for the application
-        static const std::vector <const char *> device_extensions = {
-                VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-		VK_EXT_MESH_SHADER_EXTENSION_NAME,
-		VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME,
-        };
-
         phdev = phdev_;
         window = make_window(extent, title);
         surface = make_surface(*window);
