@@ -2513,7 +2513,155 @@ inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreat
 
 } // namespace pipeline
 
+// Easier vertex layout, using templates only
+template <typename T, typename ... Args>
+constexpr size_t sizeof_all()
+{
+	if constexpr (sizeof...(Args)) {
+		return sizeof(T) + sizeof_all <Args...> ();
+	} else {
+		return sizeof(T);
+	}
 }
+
+template <typename T, bool instantiated = true>
+struct type_translator {
+	static_assert(!instantiated, "Unsupported format translation for this type");
+	static constexpr vk::Format format = vk::Format::eUndefined;
+};
+
+template <typename T>
+constexpr vk::VertexInputAttributeDescription attribute_for(uint32_t index, uint32_t offset)
+{
+	return vk::VertexInputAttributeDescription {
+		index, 0, type_translator <T> ::format, offset
+	};
+}
+
+template <typename T, typename ... Args>
+constexpr std::array <vk::VertexInputAttributeDescription, 1 + sizeof...(Args)> attributes_for(uint32_t index, uint32_t offset)
+{
+	if constexpr (sizeof...(Args)) {
+		constexpr auto previous = attributes_for <Args...> (index + 1, offset + sizeof(T));
+		return {
+			attribute_for <T> (index, offset),
+			previous
+		};
+	} else {	
+		return { attribute_for <T> (index, offset) };
+	}
+}
+
+template <typename ... Args>
+struct VertexLayout {
+	static constexpr size_t size = sizeof_all <Args...> ();
+
+	static constexpr vk::VertexInputBindingDescription binding {
+		0, size, vk::VertexInputRate::eVertex
+	};
+
+	static constexpr std::array <
+		vk::VertexInputAttributeDescription,
+		sizeof...(Args)
+	> attributes {
+		attributes_for <Args...> (0, 0)
+	};
+};
+
+// Group of shaders for a pipeline
+struct ShaderStageBundle {
+	vk::Device device;
+	littlevk::Deallocator *dal;
+
+	std::vector <vk::PipelineShaderStageCreateInfo> stages;
+
+	ShaderStageBundle(const vk::Device &device, littlevk::Deallocator *dal)
+			: device(device), dal(dal) {}
+
+	ShaderStageBundle &attach(const std::filesystem::path &path, vk::ShaderStageFlagBits flags) {
+		vk::ShaderModule module = littlevk::shader::compile(device, readfile(path), flags).unwrap(dal);
+		stages.push_back({{}, flags, module, "main"});
+		return *this;
+	}
+};
+
+// General purpose pipeline type
+struct Pipeline {
+	vk::Pipeline handle;
+	vk::PipelineLayout layout;
+};
+
+// General purpose pipeline compiler
+template <typename Layout>
+struct PipelineCompiler {
+	// TODO: option to use compute pipeline instead
+
+	// Essential
+	vk::Device device;
+	littlevk::Window *window;
+	littlevk::Deallocator *dal;
+
+	// Builder
+	vk::RenderPass render_pass;
+	ShaderStageBundle bundle;
+	
+	PipelineCompiler(const vk::Device &device, littlevk::Window *window, littlevk::Deallocator *dal)
+			: device(device), window(window), dal(dal), bundle(device, dal) {}
+
+	PipelineCompiler &with_render_pass(const vk::RenderPass &rp) {
+		render_pass = rp;
+		return *this;
+	}
+	
+	PipelineCompiler &with_shader_bundle(const ShaderStageBundle &sb) {
+		bundle = sb;
+		return *this;
+	}
+
+	Pipeline compile() const {
+		Pipeline pipeline;
+	
+		pipeline.layout = littlevk::pipeline_layout
+		(
+			device,
+			vk::PipelineLayoutCreateInfo{
+				{}, {}, {}
+			}
+		).unwrap(dal);
+
+		littlevk::pipeline::GraphicsCreateInfo pipeline_info;
+
+		pipeline_info.shader_stages = bundle.stages;
+		pipeline_info.vertex_binding = Layout::binding;
+		pipeline_info.vertex_attributes = Layout::attributes;
+		pipeline_info.extent = window->extent;
+		pipeline_info.pipeline_layout = pipeline.layout;
+		pipeline_info.render_pass = render_pass;
+		pipeline_info.fill_mode = vk::PolygonMode::eFill;
+		pipeline_info.cull_mode = vk::CullModeFlagBits::eNone;
+		pipeline_info.dynamic_viewport = true;
+
+		pipeline.handle = littlevk::pipeline::compile(device, pipeline_info).unwrap(dal);
+
+		return pipeline;
+	}
+
+	operator Pipeline() const {
+		return compile();
+	}
+};
+
+}
+
+#ifdef LITTLEVK_GLM_TRANSLATOR
+
+// Specializing for GLM types if defined
+template <>
+struct littlevk::type_translator <glm::vec2, true> {
+	static constexpr vk::Format format = vk::Format::eR32G32Sfloat;
+};
+
+#endif
 
 // Extension wrappers
 inline VKAPI_ATTR VkResult VKAPI_CALL
