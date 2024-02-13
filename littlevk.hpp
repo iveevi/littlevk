@@ -2541,25 +2541,26 @@ struct type_translator {
 	static constexpr vk::Format format = vk::Format::eUndefined;
 };
 
-template <typename T>
-constexpr vk::VertexInputAttributeDescription attribute_for(uint32_t index, uint32_t offset)
+template <uint32_t index, uint32_t offset, typename T>
+constexpr vk::VertexInputAttributeDescription attribute_for()
 {
 	return vk::VertexInputAttributeDescription {
 		index, 0, type_translator <T> ::format, offset
 	};
 }
 
-template <typename T, typename ... Args>
-constexpr std::array <vk::VertexInputAttributeDescription, 1 + sizeof...(Args)> attributes_for(uint32_t index, uint32_t offset)
+template <uint32_t index, uint32_t offset, typename T, typename ... Args>
+constexpr std::array <vk::VertexInputAttributeDescription, 1 + sizeof...(Args)> attributes_for()
 {
 	if constexpr (sizeof...(Args)) {
-		auto previous = attributes_for <Args...> (index + 1, offset + sizeof(T));
+		auto previous = attributes_for <index + 1, offset + sizeof(T), Args...> ();
 		std::array <vk::VertexInputAttributeDescription, 1 + sizeof...(Args)> out;
-		out[0] = attribute_for <T> (index, offset);
-		std::copy(previous.begin(), previous.end(), out.begin() + 1);
+		out[0] = attribute_for <index, offset, T> ();
+		for (uint32_t i = 0; i < sizeof...(Args); i++)
+			out[i + 1] = previous[i];
 		return out;
 	} else {	
-		return { attribute_for <T> (index, offset) };
+		return { attribute_for <index, offset, T> () };
 	}
 }
 
@@ -2575,7 +2576,7 @@ struct VertexLayout {
 		vk::VertexInputAttributeDescription,
 		sizeof...(Args)
 	> attributes {
-		attributes_for <Args...> (0, 0)
+		attributes_for <0, 0, Args...> ()
 	};
 };
 
@@ -2615,6 +2616,7 @@ struct PipelineCompiler {
 	// Builder
 	vk::RenderPass render_pass;
 	ShaderStageBundle bundle;
+	std::vector <vk::PushConstantRange> push_constants;
 	
 	PipelineCompiler(const vk::Device &device, littlevk::Window *window, littlevk::Deallocator *dal)
 			: device(device), window(window), dal(dal), bundle(device, dal) {}
@@ -2629,6 +2631,12 @@ struct PipelineCompiler {
 		return *this;
 	}
 
+	template <typename T>
+	PipelineCompiler &with_push_constant(vk::ShaderStageFlagBits stage) {
+		push_constants.push_back(vk::PushConstantRange { stage, 0, sizeof(T) });
+		return *this;
+	}
+
 	Pipeline compile() const {
 		Pipeline pipeline;
 	
@@ -2636,7 +2644,7 @@ struct PipelineCompiler {
 		(
 			device,
 			vk::PipelineLayoutCreateInfo{
-				{}, {}, {}
+				{}, {}, push_constants
 			}
 		).unwrap(dal);
 
@@ -2670,6 +2678,16 @@ struct PipelineCompiler {
 template <>
 struct littlevk::type_translator <glm::vec2, true> {
 	static constexpr vk::Format format = vk::Format::eR32G32Sfloat;
+};
+
+template <>
+struct littlevk::type_translator <glm::vec3, true> {
+	static constexpr vk::Format format = vk::Format::eR32G32B32Sfloat;
+};
+
+template <>
+struct littlevk::type_translator <glm::vec4, true> {
+	static constexpr vk::Format format = vk::Format::eR32G32B32A32Sfloat;
 };
 
 #endif
