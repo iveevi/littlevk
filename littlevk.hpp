@@ -2601,6 +2601,7 @@ struct ShaderStageBundle {
 struct Pipeline {
 	vk::Pipeline handle;
 	vk::PipelineLayout layout;
+	std::optional <vk::DescriptorSetLayout> dsl;
 };
 
 // General purpose pipeline compiler
@@ -2616,6 +2617,8 @@ struct PipelineCompiler {
 	// Builder
 	vk::RenderPass render_pass;
 	ShaderStageBundle bundle;
+
+	std::vector <vk::DescriptorSetLayoutBinding> dsl_bindings;
 	std::vector <vk::PushConstantRange> push_constants;
 	
 	PipelineCompiler(const vk::Device &device, littlevk::Window *window, littlevk::Deallocator *dal)
@@ -2631,6 +2634,11 @@ struct PipelineCompiler {
 		return *this;
 	}
 
+	PipelineCompiler &with_dsl_binding(uint32_t binding, uint32_t count, vk::DescriptorType type, vk::ShaderStageFlagBits stage) {
+		dsl_bindings.push_back({ binding, type, count, stage });
+		return *this;
+	}
+
 	template <typename T>
 	PipelineCompiler &with_push_constant(vk::ShaderStageFlagBits stage) {
 		push_constants.push_back(vk::PushConstantRange { stage, 0, sizeof(T) });
@@ -2639,12 +2647,24 @@ struct PipelineCompiler {
 
 	Pipeline compile() const {
 		Pipeline pipeline;
+
+		std::vector <vk::DescriptorSetLayout> dsls;
+		if (dsl_bindings.size()) {
+			vk::DescriptorSetLayout dsl = descriptor_set_layout(
+				device, vk::DescriptorSetLayoutCreateInfo {
+					{}, dsl_bindings
+				}
+			).unwrap(dal);
+
+			dsls.push_back(dsl);
+			pipeline.dsl = dsl;
+		}
 	
 		pipeline.layout = littlevk::pipeline_layout
 		(
 			device,
 			vk::PipelineLayoutCreateInfo{
-				{}, {}, push_constants
+				{}, dsls, push_constants
 			}
 		).unwrap(dal);
 
