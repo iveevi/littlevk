@@ -883,17 +883,18 @@ using FramebufferSetReturnProxy = DeviceReturnProxy <std::vector <vk::Framebuffe
 
 // Generate framebuffer from swapchain, render pass and optional depth buffer
 struct FramebufferSetInfo {
-	Swapchain *swapchain;
-	vk::RenderPass render_pass;
+	// TODO: const ref?
+	const Swapchain &swapchain;
+	const vk::RenderPass &render_pass;
 	vk::Extent2D extent;
-	vk::ImageView *depth_buffer = nullptr;
+	std::optional <std::reference_wrapper <vk::ImageView>> depth_buffer;
 };
 
 inline FramebufferSetReturnProxy framebuffers(const vk::Device &device, const FramebufferSetInfo &info)
 {
 	std::vector <vk::Framebuffer> framebuffers;
 
-	for (const vk::ImageView &view : info.swapchain->image_views) {
+	for (const vk::ImageView &view : info.swapchain.image_views) {
 		std::vector <vk::ImageView> fb_views { view };
 		if (info.depth_buffer)
 			fb_views.emplace_back(*info.depth_buffer);
