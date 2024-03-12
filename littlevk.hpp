@@ -97,6 +97,7 @@ static PFN_vkCreateDebugUtilsMessengerEXT  __vkCreateDebugUtilsMessengerEXT = 0;
 static PFN_vkDestroyDebugUtilsMessengerEXT __vkDestroyDebugUtilsMessengerEXT = 0;
 static PFN_vkCmdDrawMeshTasksEXT           __vkCmdDrawMeshTasksEXT = 0;
 static PFN_vkCmdDrawMeshTasksNV            __vkCmdDrawMeshTasksNV = 0;
+static PFN_vkGetMemoryFdKHR                __vkGetMemoryFdKHR = 0;
 
 // Standalone utils, imported from other sources
 namespace standalone {
@@ -340,10 +341,12 @@ static bool check_validation_layer_support(const std::vector <const char *> &val
 }
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debug_logger
-		(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-		VkDebugUtilsMessageTypeFlagsEXT messageType,
-		const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
-		void *pUserData)
+(
+	VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+	VkDebugUtilsMessageTypeFlagsEXT messageType,
+	const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
+	void *pUserData
+)
 {
 	// Errors
 	if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
@@ -478,7 +481,9 @@ inline const vk::Instance &get_vulkan_instance()
 	__vkDestroyDebugUtilsMessengerEXT = (PFN_vkDestroyDebugUtilsMessengerEXT) vkGetInstanceProcAddr(global_instance.instance, "vkDestroyDebugUtilsMessengerEXT");
 
 	__vkCmdDrawMeshTasksEXT = (PFN_vkCmdDrawMeshTasksEXT) vkGetInstanceProcAddr(global_instance.instance, "vkCmdDrawMeshTasksEXT");
-	__vkCmdDrawMeshTasksNV  = (PFN_vkCmdDrawMeshTasksNV)  vkGetInstanceProcAddr(global_instance.instance, "vkCmdDrawMeshTasksNV");
+	__vkCmdDrawMeshTasksNV  = (PFN_vkCmdDrawMeshTasksNV) vkGetInstanceProcAddr(global_instance.instance, "vkCmdDrawMeshTasksNV");
+
+	__vkGetMemoryFdKHR = (PFN_vkGetMemoryFdKHR) vkGetInstanceProcAddr(global_instance.instance, "vkGetMemoryFdKHR");
 
 	// Ensure these are loaded properly
 	microlog::assertion(__vkCreateDebugUtilsMessengerEXT, "get_vulkan_instance", "Failed to load extension function: vkCreateDebugUtilsMessengerEXT\n");
@@ -713,13 +718,16 @@ inline vk::PresentModeKHR pick_present_mode(const vk::PhysicalDevice &phdev, con
 
 // Swapchain allocation and destruction
 // TODO: info struct...
-inline Swapchain swapchain(const vk::PhysicalDevice &phdev,
-                const vk::Device &device,
-                const vk::SurfaceKHR &surface,
-                const vk::Extent2D &extent,
-                const QueueFamilyIndices &indices,
-		const std::optional <vk::PresentModeKHR> &priority_mode = std::nullopt,
-                const vk::SwapchainKHR *old_swapchain = nullptr)
+inline Swapchain swapchain
+(
+ 	const vk::PhysicalDevice &phdev,
+	const vk::Device &device,
+	const vk::SurfaceKHR &surface,
+	const vk::Extent2D &extent,
+	const QueueFamilyIndices &indices,
+	const std::optional <vk::PresentModeKHR> &priority_mode = std::nullopt,
+	const vk::SwapchainKHR *old_swapchain = nullptr
+)
 {
 	Swapchain swapchain;
 
@@ -822,9 +830,12 @@ inline Swapchain swapchain(const vk::PhysicalDevice &phdev,
 	return swapchain;
 }
 
-inline void resize(const vk::Device &device,
-		Swapchain &swapchain,
-		const vk::Extent2D &extent)
+inline void resize
+(
+ 	const vk::Device &device,
+	Swapchain &swapchain,
+	const vk::Extent2D &extent
+)
 {
 	// First free the old swapchain resources
 	for (const vk::ImageView &view : swapchain.image_views)
@@ -1525,9 +1536,22 @@ inline uint32_t find_memory_type(const vk::PhysicalDeviceMemoryProperties &mem_p
 	return type_index;
 }
 
-inline BufferReturnProxy buffer(const vk::Device &device, size_t size, const vk::BufferUsageFlags &flags, const vk::PhysicalDeviceMemoryProperties &properties)
+// Get file decriptor
+inline int find_buffer_fd(const vk::Device &device, const Buffer &buffer)
 {
-	// TODO: usage flags as well...
+	vk::MemoryGetFdInfoKHR info {};
+	info.memory = buffer.memory;
+	info.handleType = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd;
+	
+	VkMemoryGetFdInfoKHR cinfo = static_cast <VkMemoryGetFdInfoKHR> (info);
+	
+	int fd = -1;
+	vkGetMemoryFdKHR(device, &cinfo, &fd);
+	return fd;
+}
+
+inline BufferReturnProxy buffer(const vk::Device &device, size_t size, const vk::BufferUsageFlags &flags, const vk::PhysicalDeviceMemoryProperties &properties, bool external = false)
+{
         Buffer buffer;
 
         vk::BufferCreateInfo buffer_info {
@@ -1536,15 +1560,25 @@ inline BufferReturnProxy buffer(const vk::Device &device, size_t size, const vk:
         };
 
         buffer.buffer = device.createBuffer(buffer_info);
-
         buffer.requirements = device.getBufferMemoryRequirements(buffer.buffer);
+
         vk::MemoryAllocateInfo buffer_alloc_info {
-                buffer.requirements.size, find_memory_type(
-                        properties, buffer.requirements.memoryTypeBits,
+                buffer.requirements.size,
+		find_memory_type
+		(
+                        properties,
+			buffer.requirements.memoryTypeBits,
                         vk::MemoryPropertyFlagBits::eHostVisible
-                                | vk::MemoryPropertyFlagBits::eHostCoherent
+				| vk::MemoryPropertyFlagBits::eHostCoherent
                 )
         };
+
+	// Export the buffer data for other APIs (e.g. CUDA)
+	if (external) {
+		vk::ExportMemoryAllocateInfo export_info {};
+		export_info.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd;
+		buffer_alloc_info.pNext = &export_info;
+	}
 
         buffer.memory = device.allocateMemory(buffer_alloc_info);
         device.bindBufferMemory(buffer.buffer, buffer.memory, 0);
@@ -1555,12 +1589,14 @@ inline BufferReturnProxy buffer(const vk::Device &device, size_t size, const vk:
 using FilledBufferReturnProxy = ComposedReturnProxy <Buffer>;
 
 template <typename T>
-inline FilledBufferReturnProxy buffer(const vk::Device &device, const std::vector <T> &vec, const vk::BufferUsageFlags &flags, const vk::PhysicalDeviceMemoryProperties &properties)
+inline FilledBufferReturnProxy buffer(const vk::Device &device, const std::vector <T> &vec, const vk::BufferUsageFlags &flags, const vk::PhysicalDeviceMemoryProperties &properties, bool external = false)
 {
 	DeallocationQueue dq;
-	Buffer buffer = littlevk::buffer(device,
+	Buffer buffer = littlevk::buffer
+	(
+	 	device,
 		vec.size() * sizeof(T),
-		flags, properties
+		flags, properties, external
 	).defer(dq);
 
 	upload(device, buffer, vec);
@@ -1568,12 +1604,14 @@ inline FilledBufferReturnProxy buffer(const vk::Device &device, const std::vecto
 }
 
 template <typename T, size_t N>
-inline FilledBufferReturnProxy buffer(const vk::Device &device, const std::array <T, N> &vec, const vk::BufferUsageFlags &flags, const vk::PhysicalDeviceMemoryProperties &properties)
+inline FilledBufferReturnProxy buffer(const vk::Device &device, const std::array <T, N> &vec, const vk::BufferUsageFlags &flags, const vk::PhysicalDeviceMemoryProperties &properties, bool external = false)
 {
 	DeallocationQueue dq;
-	Buffer buffer = littlevk::buffer(device,
+	Buffer buffer = littlevk::buffer
+	(
+	 	device,
 		vec.size() * sizeof(T),
-		flags, properties
+		flags, properties, external
 	).defer(dq);
 
 	upload(device, buffer, vec);
@@ -1865,10 +1903,14 @@ inline void transition(const vk::CommandBuffer &cmd,
 }
 
 // Copying buffer to image
-static void copy_buffer_to_image(const vk::CommandBuffer &cmd,
-		const vk::Image &image, const Buffer &buffer,
-		const vk::Extent2D &extent,
-		const vk::ImageLayout &layout)
+static void copy_buffer_to_image
+(
+ 	const vk::CommandBuffer &cmd,
+	const vk::Image &image,
+	const Buffer &buffer,
+	const vk::Extent2D &extent,
+	const vk::ImageLayout &layout
+)
 {
 	// TODO: ensure same sizes...,
 	// TODO: pass format as well...
@@ -1885,9 +1927,13 @@ static void copy_buffer_to_image(const vk::CommandBuffer &cmd,
 	cmd.copyBufferToImage(*buffer, image, layout, region);
 }
 
-static void copy_buffer_to_image(const vk::CommandBuffer &cmd,
-		const Image &image, const Buffer &buffer,
-		const vk::ImageLayout &layout)
+static void copy_buffer_to_image
+(
+ 	const vk::CommandBuffer &cmd,
+	const Image &image,
+	const Buffer &buffer,
+	const vk::ImageLayout &layout
+)
 {
 	// TODO: ensure same sizes...,
 	vk::BufferImageCopy region {
@@ -1904,10 +1950,14 @@ static void copy_buffer_to_image(const vk::CommandBuffer &cmd,
 }
 
 // Copying image to buffer
-static void copy_image_to_buffer(const vk::CommandBuffer &cmd,
-		const vk::Image &image, const Buffer &buffer,
-		const vk::Extent2D &extent,
-		const vk::ImageLayout &layout)
+static void copy_image_to_buffer
+(
+ 	const vk::CommandBuffer &cmd,
+	const vk::Image &image,
+	const Buffer &buffer,
+	const vk::Extent2D &extent,
+	const vk::ImageLayout &layout
+)
 {
 	vk::BufferImageCopy region {
 		0, 0, 0,
@@ -1922,9 +1972,13 @@ static void copy_image_to_buffer(const vk::CommandBuffer &cmd,
 	cmd.copyImageToBuffer(image, layout, *buffer, region);
 }
 
-static void copy_image_to_buffer(const vk::CommandBuffer &cmd,
-		const Image &image, const Buffer &buffer,
-		const vk::ImageLayout &layout)
+static void copy_image_to_buffer
+(
+ 	const vk::CommandBuffer &cmd,
+	const Image &image,
+	const Buffer &buffer,
+	const vk::ImageLayout &layout
+)
 {
 	vk::BufferImageCopy region {
 		0, 0, 0,
@@ -2717,10 +2771,10 @@ struct littlevk::type_translator <glm::vec4, true> {
 inline VKAPI_ATTR VkResult VKAPI_CALL
 vkCreateDebugUtilsMessengerEXT
 (
-		VkInstance instance,
-		const VkDebugUtilsMessengerCreateInfoEXT *create_info,
-		const VkAllocationCallbacks *allocator,
-		VkDebugUtilsMessengerEXT *debug_messenger
+	VkInstance instance,
+	const VkDebugUtilsMessengerCreateInfoEXT *create_info,
+	const VkAllocationCallbacks *allocator,
+	VkDebugUtilsMessengerEXT *debug_messenger
 )
 {
 	microlog::assertion(__vkCreateDebugUtilsMessengerEXT, "vkCreateDebugUtilsMessengerEXT", "Null function address\n");
@@ -2730,37 +2784,49 @@ vkCreateDebugUtilsMessengerEXT
 inline VKAPI_ATTR void VKAPI_CALL
 vkDestroyDebugUtilsMessengerEXT
 (
-		VkInstance instance,
-		VkDebugUtilsMessengerEXT debug_messenger,
-		const VkAllocationCallbacks *allocator
+	VkInstance instance,
+	VkDebugUtilsMessengerEXT debug_messenger,
+	const VkAllocationCallbacks *allocator
 )
 {
 	microlog::assertion(__vkDestroyDebugUtilsMessengerEXT, "vkDestroyDebugUtilsMessengerEXT", "Null function address\n");
-	__vkDestroyDebugUtilsMessengerEXT(instance, debug_messenger, allocator);
+	return __vkDestroyDebugUtilsMessengerEXT(instance, debug_messenger, allocator);
 }
 
 
 inline VKAPI_ATTR void VKAPI_CALL
 vkCmdDrawMeshTasksEXT
 (
-		VkCommandBuffer commandBuffer,
-		uint32_t groupCountX,
-		uint32_t groupCountY,
-		uint32_t groupCountZ
+	VkCommandBuffer commandBuffer,
+	uint32_t groupCountX,
+	uint32_t groupCountY,
+	uint32_t groupCountZ
 )
 {
 	microlog::assertion(__vkCmdDrawMeshTasksEXT, "vkCmdDrawMeshTasksEXT", "Null function address\n");
-	__vkCmdDrawMeshTasksEXT(commandBuffer, groupCountX, groupCountY, groupCountZ);
+	return __vkCmdDrawMeshTasksEXT(commandBuffer, groupCountX, groupCountY, groupCountZ);
 }
 
 inline VKAPI_ATTR void VKAPI_CALL
 vkCmdDrawMeshTasksNV
 (
-		VkCommandBuffer commandBuffer,
-		uint32_t taskCount,
-		uint32_t firstTask
+	VkCommandBuffer commandBuffer,
+	uint32_t taskCount,
+	uint32_t firstTask
 )
 {
 	microlog::assertion(__vkCmdDrawMeshTasksNV, "vkCmdDrawMeshTasksNV", "Null function address\n");
-	__vkCmdDrawMeshTasksNV(commandBuffer, taskCount, firstTask);
+	return __vkCmdDrawMeshTasksNV(commandBuffer, taskCount, firstTask);
+}
+
+inline VKAPI_ATTR void VKAPI_CALL
+vkGetMemoryFdKHR
+(
+	VkDevice device,
+	VkMemoryGetFdInfoKHR *info,
+	int *fd
+)
+{
+	microlog::assertion(__vkGetMemoryFdKHR, "vkGetMemoryFdKHR", "Null function address\n");
+	__vkGetMemoryFdKHR(device, info, fd);
 }
