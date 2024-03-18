@@ -91,11 +91,33 @@ inline void assertion(bool cond, const char *header, const char *format, ...)
 }
 
 // Loading Vulkan extensions
-static PFN_vkCreateDebugUtilsMessengerEXT  __vkCreateDebugUtilsMessengerEXT = 0;
-static PFN_vkDestroyDebugUtilsMessengerEXT __vkDestroyDebugUtilsMessengerEXT = 0;
-static PFN_vkCmdDrawMeshTasksEXT           __vkCmdDrawMeshTasksEXT = 0;
-static PFN_vkCmdDrawMeshTasksNV            __vkCmdDrawMeshTasksNV = 0;
-static PFN_vkGetMemoryFdKHR                __vkGetMemoryFdKHR = 0;
+struct Extensions {
+	// TODO: template to make easier?
+	static auto &vkCreateDebugUtilsMessengerEXT() {
+		static PFN_vkCreateDebugUtilsMessengerEXT handle = 0;
+		return handle;
+	}
+
+	static auto &vkDestroyDebugUtilsMessengerEXT() {
+		static PFN_vkDestroyDebugUtilsMessengerEXT handle = 0;
+		return handle;
+	}
+
+	static auto &vkCmdDrawMeshTasksEXT() {
+		static PFN_vkCmdDrawMeshTasksEXT handle = 0;
+		return handle;
+	}
+
+	static auto &vkCmdDrawMeshTasksNV() {
+		static PFN_vkCmdDrawMeshTasksNV handle = 0;
+		return handle;
+	}
+
+	static auto &vkGetMemoryFdKHR() {
+		static PFN_vkGetMemoryFdKHR handle = 0;
+		return handle;
+	}
+};
 
 // Standalone utils, imported from other sources
 namespace standalone {
@@ -472,19 +494,28 @@ inline const vk::Instance &get_vulkan_instance()
 	global_instance.instance = vk::createInstance(instance_info);
 
 	// Post initialization; load extensions
-	__vkCreateDebugUtilsMessengerEXT = (PFN_vkCreateDebugUtilsMessengerEXT) vkGetInstanceProcAddr(global_instance.instance, "vkCreateDebugUtilsMessengerEXT");
-	__vkDestroyDebugUtilsMessengerEXT = (PFN_vkDestroyDebugUtilsMessengerEXT) vkGetInstanceProcAddr(global_instance.instance, "vkDestroyDebugUtilsMessengerEXT");
+	Extensions::vkCreateDebugUtilsMessengerEXT() = (PFN_vkCreateDebugUtilsMessengerEXT) vkGetInstanceProcAddr(global_instance.instance, "vkCreateDebugUtilsMessengerEXT");
+	microlog::assertion(Extensions::vkCreateDebugUtilsMessengerEXT(), "vkCreateDebugUtilsMessengerEXT", "Null function address\n");
 
-	__vkCmdDrawMeshTasksEXT = (PFN_vkCmdDrawMeshTasksEXT) vkGetInstanceProcAddr(global_instance.instance, "vkCmdDrawMeshTasksEXT");
-	__vkCmdDrawMeshTasksNV  = (PFN_vkCmdDrawMeshTasksNV) vkGetInstanceProcAddr(global_instance.instance, "vkCmdDrawMeshTasksNV");
+	Extensions::vkDestroyDebugUtilsMessengerEXT() = (PFN_vkDestroyDebugUtilsMessengerEXT) vkGetInstanceProcAddr(global_instance.instance, "vkDestroyDebugUtilsMessengerEXT");
+	microlog::assertion(Extensions::vkDestroyDebugUtilsMessengerEXT(), "vkDestroyDebugUtilsMessengerEXT", "Null function address\n");
 
-	__vkGetMemoryFdKHR = (PFN_vkGetMemoryFdKHR) vkGetInstanceProcAddr(global_instance.instance, "vkGetMemoryFdKHR");
+	Extensions::vkCmdDrawMeshTasksEXT() = (PFN_vkCmdDrawMeshTasksEXT) vkGetInstanceProcAddr(global_instance.instance, "vkCmdDrawMeshTasksEXT");
+	microlog::assertion(Extensions::vkCmdDrawMeshTasksEXT(), "vkCmdDrawMeshTasksEXT", "Null function address\n");
+
+	Extensions::vkCmdDrawMeshTasksNV() = (PFN_vkCmdDrawMeshTasksNV) vkGetInstanceProcAddr(global_instance.instance, "vkCmdDrawMeshTasksNV");
+	microlog::assertion(Extensions::vkCmdDrawMeshTasksNV(), "vkCmdDrawMeshTasksNV", "Null function address\n");
+
+	Extensions::vkGetMemoryFdKHR() = (PFN_vkGetMemoryFdKHR) vkGetInstanceProcAddr(global_instance.instance, "vkGetMemoryFdKHR");
+	microlog::assertion(Extensions::vkGetMemoryFdKHR(), "vkGetMemoryFdKHR", "Null function address\n");
 
 	// Ensure these are loaded properly
-	microlog::assertion(__vkCreateDebugUtilsMessengerEXT, "get_vulkan_instance", "Failed to load extension function: vkCreateDebugUtilsMessengerEXT\n");
+	microlog::assertion(Extensions::vkCreateDebugUtilsMessengerEXT(), "get_vulkan_instance", "Failed to load extension function: vkCreateDebugUtilsMessengerEXT\n");
 
-	// TODO: fill this in
-	microlog::info("get_vulkan_instance", "Loaded address %p for vkCreateDebugUtilsMessengerEXT\n", __vkCreateDebugUtilsMessengerEXT);
+	// Log function addresses
+	microlog::info("get_vulkan_instance", "Loaded address %p for vkCreateDebugUtilsMessengerEXT\n", Extensions::vkCreateDebugUtilsMessengerEXT());
+	microlog::info("get_vulkan_instance", "Loaded address %p for vkDestroyDebugUtilsMessengerEXT\n", Extensions::vkDestroyDebugUtilsMessengerEXT());
+	microlog::info("get_vulkan_instance", "Loaded address %p for vkGetMemoryFdKHR\n", Extensions::vkGetMemoryFdKHR());
 
 	// Loading the debug messenger
 	if (config()->enable_validation_layers) {
@@ -2830,8 +2861,8 @@ vkCreateDebugUtilsMessengerEXT
 	VkDebugUtilsMessengerEXT *debug_messenger
 )
 {
-	microlog::assertion(__vkCreateDebugUtilsMessengerEXT, "vkCreateDebugUtilsMessengerEXT", "Null function address\n");
-	return __vkCreateDebugUtilsMessengerEXT(instance, create_info, allocator, debug_messenger);
+	microlog::assertion(Extensions::vkCreateDebugUtilsMessengerEXT(), "vkCreateDebugUtilsMessengerEXT", "Null function address\n");
+	return Extensions::vkCreateDebugUtilsMessengerEXT()(instance, create_info, allocator, debug_messenger);
 }
 
 inline VKAPI_ATTR void VKAPI_CALL
@@ -2842,8 +2873,8 @@ vkDestroyDebugUtilsMessengerEXT
 	const VkAllocationCallbacks *allocator
 )
 {
-	microlog::assertion(__vkDestroyDebugUtilsMessengerEXT, "vkDestroyDebugUtilsMessengerEXT", "Null function address\n");
-	return __vkDestroyDebugUtilsMessengerEXT(instance, debug_messenger, allocator);
+	microlog::assertion(Extensions::vkDestroyDebugUtilsMessengerEXT(), "vkDestroyDebugUtilsMessengerEXT", "Null function address\n");
+	return Extensions::vkDestroyDebugUtilsMessengerEXT()(instance, debug_messenger, allocator);
 }
 
 
@@ -2856,8 +2887,8 @@ vkCmdDrawMeshTasksEXT
 	uint32_t groupCountZ
 )
 {
-	microlog::assertion(__vkCmdDrawMeshTasksEXT, "vkCmdDrawMeshTasksEXT", "Null function address\n");
-	return __vkCmdDrawMeshTasksEXT(commandBuffer, groupCountX, groupCountY, groupCountZ);
+	microlog::assertion(Extensions::vkCmdDrawMeshTasksEXT(), "vkCmdDrawMeshTasksEXT", "Null function address\n");
+	return Extensions::vkCmdDrawMeshTasksEXT()(commandBuffer, groupCountX, groupCountY, groupCountZ);
 }
 
 inline VKAPI_ATTR void VKAPI_CALL
@@ -2868,8 +2899,8 @@ vkCmdDrawMeshTasksNV
 	uint32_t firstTask
 )
 {
-	microlog::assertion(__vkCmdDrawMeshTasksNV, "vkCmdDrawMeshTasksNV", "Null function address\n");
-	return __vkCmdDrawMeshTasksNV(commandBuffer, taskCount, firstTask);
+	microlog::assertion(Extensions::vkCmdDrawMeshTasksNV(), "vkCmdDrawMeshTasksNV", "Null function address\n");
+	return Extensions::vkCmdDrawMeshTasksNV()(commandBuffer, taskCount, firstTask);
 }
 
 inline VKAPI_ATTR VkResult VKAPI_CALL
@@ -2880,6 +2911,6 @@ vkGetMemoryFdKHR
 	int *fd
 )
 {
-	microlog::assertion(__vkGetMemoryFdKHR, "vkGetMemoryFdKHR", "Null function address\n");
-	return __vkGetMemoryFdKHR(device, info, fd);
+	microlog::assertion(Extensions::vkGetMemoryFdKHR(), "vkGetMemoryFdKHR", "Null function address\n");
+	return Extensions::vkGetMemoryFdKHR()(device, info, fd);
 }
