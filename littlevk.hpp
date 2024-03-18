@@ -18,7 +18,6 @@
 #include <stdarg.h>
 
 // Vulkan and GLFW
-// TODO: suppor other window apis later
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_core.h>
 #include <vulkan/vulkan_enums.hpp>
@@ -92,7 +91,6 @@ inline void assertion(bool cond, const char *header, const char *format, ...)
 }
 
 // Loading Vulkan extensions
-// TODO: note to users that this is being done...
 static PFN_vkCreateDebugUtilsMessengerEXT  __vkCreateDebugUtilsMessengerEXT = 0;
 static PFN_vkDestroyDebugUtilsMessengerEXT __vkDestroyDebugUtilsMessengerEXT = 0;
 static PFN_vkCmdDrawMeshTasksEXT           __vkCmdDrawMeshTasksEXT = 0;
@@ -288,7 +286,6 @@ struct ComposedReturnProxy {
 		if (this->failed)
 			return {};
 
-		T value = this->value;
 		while (!this->queue.empty()) {
 			deallocator->device_deallocators.push(this->queue.front());
 			this->queue.pop();
@@ -301,7 +298,6 @@ struct ComposedReturnProxy {
 		if (this->failed)
 			return {};
 
-		T value = this->value;
 		while (!this->queue.empty()) {
 			queue.push(this->queue.front());
 			this->queue.pop();
@@ -316,7 +312,6 @@ namespace validation {
 // Create debug messenger
 static bool check_validation_layer_support(const std::vector <const char *> &validation_layers)
 {
-	// TODO: remove this initial part?
 	uint32_t layer_count;
 	vkEnumerateInstanceLayerProperties(&layer_count, nullptr);
 
@@ -548,12 +543,11 @@ inline Window *make_window(const vk::Extent2D &extent, const std::string &title)
 	detail::initialize_glfw();
 
         // Create the window
-        GLFWwindow *handle = glfwCreateWindow(
-                extent.width,
-                extent.height,
+        GLFWwindow *handle = glfwCreateWindow
+	(
+                extent.width, extent.height,
                 title.c_str(),
-                nullptr,
-                nullptr
+                nullptr, nullptr
         );
 
         // Check the actual size of the window
@@ -1489,6 +1483,20 @@ inline float Skeleton::aspect_ratio() const
 	return (float) window->extent.width / (float) window->extent.height;
 }
 
+// Get memory file decriptor
+inline int find_memory_fd(const vk::Device &device, const vk::DeviceMemory &memory)
+{
+	vk::MemoryGetFdInfoKHR info {};
+	info.memory = memory;
+	info.handleType = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd;
+
+	VkMemoryGetFdInfoKHR cinfo = static_cast <VkMemoryGetFdInfoKHR> (info);
+
+	int fd = -1;
+	vkGetMemoryFdKHR(device, &cinfo, &fd);
+	return fd;
+}
+
 // Vulkan buffer wrapper
 struct Buffer {
         vk::Buffer buffer;
@@ -1536,20 +1544,6 @@ inline uint32_t find_memory_type(const vk::PhysicalDeviceMemoryProperties &mem_p
 	return type_index;
 }
 
-// Get file decriptor
-inline int find_buffer_fd(const vk::Device &device, const Buffer &buffer)
-{
-	vk::MemoryGetFdInfoKHR info {};
-	info.memory = buffer.memory;
-	info.handleType = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd;
-	
-	VkMemoryGetFdInfoKHR cinfo = static_cast <VkMemoryGetFdInfoKHR> (info);
-	
-	int fd = -1;
-	vkGetMemoryFdKHR(device, &cinfo, &fd);
-	return fd;
-}
-
 inline BufferReturnProxy buffer(const vk::Device &device, size_t size, const vk::BufferUsageFlags &flags, const vk::PhysicalDeviceMemoryProperties &properties, bool external = false)
 {
         Buffer buffer;
@@ -1559,6 +1553,14 @@ inline BufferReturnProxy buffer(const vk::Device &device, size_t size, const vk:
                 vk::SharingMode::eExclusive, 0, nullptr
         };
 
+	// Exporting the buffer data for other APIs (e.g. CUDA)
+	vk::ExternalMemoryBufferCreateInfo external_info {};
+	if (external) {
+		external_info.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd;
+		buffer_info.pNext = &external_info;
+	}
+
+	// Allocate buffer info
         buffer.buffer = device.createBuffer(buffer_info);
         buffer.requirements = device.getBufferMemoryRequirements(buffer.buffer);
 
@@ -1574,12 +1576,14 @@ inline BufferReturnProxy buffer(const vk::Device &device, size_t size, const vk:
         };
 
 	// Export the buffer data for other APIs (e.g. CUDA)
+	// TODO: general function
+	vk::ExportMemoryAllocateInfo export_info {};
 	if (external) {
-		vk::ExportMemoryAllocateInfo export_info {};
 		export_info.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd;
 		buffer_alloc_info.pNext = &export_info;
 	}
 
+	// Allocate the device buffer
         buffer.memory = device.allocateMemory(buffer_alloc_info);
         device.bindBufferMemory(buffer.buffer, buffer.memory, 0);
 
@@ -1683,7 +1687,7 @@ struct Image {
 		return image;
 	}
 
-	vk::DeviceSize deivce_size() const {
+	vk::DeviceSize device_size() const {
 		return requirements.size;
 	}
 };
@@ -1705,6 +1709,7 @@ struct ImageCreateInfo {
         vk::Format format;
         vk::ImageUsageFlags usage;
 	vk::ImageAspectFlags aspect;
+	bool external;
 };
 
 inline ImageReturnProxy image(const vk::Device &device, const ImageCreateInfo &info, const vk::PhysicalDeviceMemoryProperties &properties)
@@ -1721,15 +1726,30 @@ inline ImageReturnProxy image(const vk::Device &device, const ImageCreateInfo &i
                 vk::ImageLayout::eUndefined
         };
 
+	vk::ExternalMemoryImageCreateInfo external_info {};
+	if (info.external) {
+		external_info.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd;
+		image_info.pNext = &external_info;
+	}
+
         image.image = device.createImage(image_info);
         image.requirements = device.getImageMemoryRequirements(image.image);
 
         vk::MemoryAllocateInfo alloc_info {
-                image.requirements.size, find_memory_type(
-                        properties, image.requirements.memoryTypeBits,
+                image.requirements.size,
+		find_memory_type
+		(
+                        properties,
+			image.requirements.memoryTypeBits,
                         vk::MemoryPropertyFlagBits::eDeviceLocal
                 )
         };
+
+	vk::ExportMemoryAllocateInfo export_info {};
+	if (info.external) {
+		export_info.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd;
+		alloc_info.pNext = &export_info;
+	}
 
         image.memory = device.allocateMemory(alloc_info);
         device.bindImageMemory(image.image, image.memory, 0);
@@ -1903,7 +1923,7 @@ inline void transition(const vk::CommandBuffer &cmd,
 }
 
 // Copying buffer to image
-static void copy_buffer_to_image
+inline void copy_buffer_to_image
 (
  	const vk::CommandBuffer &cmd,
 	const vk::Image &image,
@@ -1927,7 +1947,7 @@ static void copy_buffer_to_image
 	cmd.copyBufferToImage(*buffer, image, layout, region);
 }
 
-static void copy_buffer_to_image
+inline void copy_buffer_to_image
 (
  	const vk::CommandBuffer &cmd,
 	const Image &image,
@@ -1950,7 +1970,7 @@ static void copy_buffer_to_image
 }
 
 // Copying image to buffer
-static void copy_image_to_buffer
+inline void copy_image_to_buffer
 (
  	const vk::CommandBuffer &cmd,
 	const vk::Image &image,
@@ -1972,7 +1992,7 @@ static void copy_image_to_buffer
 	cmd.copyImageToBuffer(image, layout, *buffer, region);
 }
 
-static void copy_image_to_buffer
+inline void copy_image_to_buffer
 (
  	const vk::CommandBuffer &cmd,
 	const Image &image,
@@ -2147,6 +2167,39 @@ inline SamplerReturnProxy sampler(const vk::Device &device, const vk::SamplerCre
 
 	return std::move(sampler);
 }
+
+// Default sampler builder
+struct SamplerCompiler {
+	const vk::Device &device;
+	Deallocator *const dal;
+
+	vk::Filter mag = vk::Filter::eLinear;
+	vk::Filter min = vk::Filter::eLinear;
+
+	SamplerCompiler(const vk::Device &device, Deallocator *const dal)
+			: device(device), dal(dal) {}
+
+	operator vk::Sampler() const {
+		vk::SamplerCreateInfo info {
+			vk::SamplerCreateFlags {},
+			mag, min,
+			vk::SamplerMipmapMode::eLinear,
+			vk::SamplerAddressMode::eRepeat,
+			vk::SamplerAddressMode::eRepeat,
+			vk::SamplerAddressMode::eRepeat,
+			0.0f,
+			VK_FALSE,
+			1.0f,
+			VK_FALSE,
+			vk::CompareOp::eAlways,
+			0.0f, 0.0f,
+			vk::BorderColor::eIntOpaqueBlack,
+			VK_FALSE
+		};
+
+		return sampler(device, info).unwrap(dal);
+	}
+};
 
 namespace shader {
 
@@ -2819,14 +2872,14 @@ vkCmdDrawMeshTasksNV
 	return __vkCmdDrawMeshTasksNV(commandBuffer, taskCount, firstTask);
 }
 
-inline VKAPI_ATTR void VKAPI_CALL
+inline VKAPI_ATTR VkResult VKAPI_CALL
 vkGetMemoryFdKHR
 (
 	VkDevice device,
-	VkMemoryGetFdInfoKHR *info,
+	const VkMemoryGetFdInfoKHR *info,
 	int *fd
 )
 {
 	microlog::assertion(__vkGetMemoryFdKHR, "vkGetMemoryFdKHR", "Null function address\n");
-	__vkGetMemoryFdKHR(device, info, fd);
+	return __vkGetMemoryFdKHR(device, info, fd);
 }
