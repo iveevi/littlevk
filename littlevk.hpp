@@ -122,97 +122,59 @@ struct Extensions {
 // Standalone utils, imported from other sources
 namespace standalone {
 
-// NOTE: From the glslang project
-// Default include class for normal include convention of search backward
-// through the stack of active include paths (for nested includes).
-// Can be overridden to customize.
-class DirStackFileIncluder : public glslang::TShader::Includer {
-public:
-	DirStackFileIncluder() : externalLocalDirectoryCount(0) { }
-
-	IncludeResult* includeLocal(const char* headerName,
-			const char* includerName,
-			size_t inclusionDepth) override {
-		return readLocalPath(headerName, includerName, (int)inclusionDepth);
+inline const std::string read_file(const std::filesystem::path &path)
+{
+	std::ifstream f(path);
+	if (!f.good()) {
+		printf("Could not open file: %s\n", path.c_str());
+		return "";
 	}
 
-	IncludeResult* includeSystem(const char* headerName,
-			const char* /*includerName*/,
-			size_t /*inclusionDepth*/) override {
-		return readSystemPath(headerName);
+	std::stringstream s;
+	s << f.rdbuf();
+	return s.str();
+}
+
+struct DirectoryIncluder : public glslang::TShader::Includer {
+	std::vector <std::string> directories;
+	// std::set <std::string> includedFiles;
+
+	DirectoryIncluder() = default;
+
+	IncludeResult *includeLocal(const char *header, const char *includer, size_t depth) override {
+		return readLocalPath(header, includer, (int) depth);
 	}
 
-	// Externally set directories. E.g., from a command-line -I<dir>.
-	//  - Most-recently pushed are checked first.
-	//  - All these are checked after the parse-time stack of local directories
-	//    is checked.
-	//  - This only applies to the "local" form of #include.
-	//  - Makes its own copy of the path.
-	void pushExternalLocalDirectory(const std::string& dir) {
-		directoryStack.push_back(dir);
-		externalLocalDirectoryCount = (int)directoryStack.size();
+	IncludeResult *includeSystem(const char *header, const char *includer, size_t depth) override {
+		return nullptr;
 	}
 
-	void releaseInclude(IncludeResult* result) override {
+	void releaseInclude(IncludeResult *result) override {
 		if (result != nullptr) {
-			delete [] static_cast<tUserDataElement*>(result->userData);
+			delete[] static_cast <char *> (result->userData);
 			delete result;
 		}
 	}
 
-	std::set<std::string> getIncludedFiles() {
-		return includedFiles;
+	void include(const std::string &dir) {
+		directories.push_back(dir);
 	}
-protected:
-	typedef char tUserDataElement;
-	std::vector<std::string> directoryStack;
-	int externalLocalDirectoryCount;
-	std::set<std::string> includedFiles;
 
-	// Search for a valid "local" path based on combining the stack of include
-	// directories and the nominal name of the header.
-	IncludeResult* readLocalPath(const char* headerName, const char* includerName, int depth) {
-		// Discard popped include directories, and
-		// initialize when at parse-time first level.
-		directoryStack.resize(depth + externalLocalDirectoryCount);
-		if (depth == 1)
-			directoryStack.back() = getDirectory(includerName);
-
-		// Find a directory that works, using a reverse search of the include stack.
-		for (auto it = directoryStack.rbegin(); it != directoryStack.rend(); ++it) {
-			std::string path = *it + '/' + headerName;
+	IncludeResult *readLocalPath(const char *header, const char *includer, int depth) {
+		for (auto it = directories.rbegin(); it != directories.rend(); it++) {
+			std::string path = *it + '/' + header;
 			std::replace(path.begin(), path.end(), '\\', '/');
 			std::ifstream file(path, std::ios_base::binary | std::ios_base::ate);
 			if (file) {
-				directoryStack.push_back(getDirectory(path));
-				includedFiles.insert(path);
-				return newIncludeResult(path, file, (int)file.tellg());
+				int length = file.tellg();
+				char *content = new char[length];
+				file.seekg(0, file.beg);
+				file.read(content, length);
+				return new IncludeResult(path, content, length, content);
 			}
 		}
 
 		return nullptr;
-	}
-
-	// Search for a valid <system> path.
-	// Not implemented yet; returning nullptr signals failure to find.
-	IncludeResult* readSystemPath(const char* /*headerName*/) const {
-		return nullptr;
-	}
-
-	// Do actual reading of the file, filling in a new include result.
-	IncludeResult* newIncludeResult(const std::string& path, std::ifstream& file, int length) const
-	{
-		char* content = new tUserDataElement [length];
-		file.seekg(0, file.beg);
-		file.read(content, length);
-		return new IncludeResult(path, content, length, content);
-	}
-
-	// If no path markers, return current working directory.
-	// Otherwise, strip file name and return path leading up to it.
-	std::string getDirectory(const std::string path) const {
-		size_t last = path.find_last_of("/\\");
-		return last == std::string::npos ? "." : path.substr(0, last);
 	}
 };
 
@@ -2238,19 +2200,6 @@ namespace shader {
 using Defines = std::map <std::string, std::string>;
 using Includes = std::set <std::string>;
 
-inline const std::string read_file(const std::filesystem::path &path)
-{
-	std::ifstream f(path);
-	if (!f.good()) {
-		printf("Could not open file: %s\n", path.c_str());
-		return "";
-	}
-
-	std::stringstream s;
-	s << f.rdbuf();
-	return s.str();
-}
-
 // Local structs
 struct _compile_out {
 	std::vector <unsigned int> 	spirv = {};
@@ -2299,99 +2248,14 @@ inline EShLanguage translate_shader_stage(const vk::ShaderStageFlagBits &stage)
 	return EShLangVertex;
 }
 
-static std::string preprocess(const std::string &source,
-		const std::map <std::string, std::string> &defines,
-                const std::set <std::string> &paths)
+static _compile_out glsl_to_spriv
+(
+	const std::string &source,
+	const std::set <std::string> &paths,
+	const std::map <std::string, std::string> &defines,
+	const vk::ShaderStageFlagBits &shader_type
+)
 {
-	// Defines contains string values to be relpaced
-	// e.g. if {"VERSION", "450"} is in defines, then
-	// "${VERSION}" will be replaced with "450"
-
-	std::string out = "";
-	std::string line;
-
-	std::istringstream stream(source);
-	while (std::getline(stream, line)) {
-		// Check if line is an include but not commented out
-		if (line.find("#include") != std::string::npos &&
-				line.find("//") == std::string::npos) {
-			// Get the include path
-			std::regex regex("#include \"(.*)\"");
-			std::smatch match;
-			std::regex_search(line, match, regex);
-
-			// Check that the regex matched
-			if (match.size() != 2) {
-				// KOBRA_LOG_FUNC(Log::ERROR)
-				// 	<< "Failed to match regex for include: "
-				// 	<< line << std::endl;
-				continue;
-			}
-
-			// Read the file
-                        std::string source = "";
-
-                        for (const std::string &dir : paths) {
-                                std::filesystem::path path = dir;
-                                path /= match[1].str();
-
-                                source = read_file(path);
-                                if (source != "") {
-                                        break;
-                                }
-                        }
-
-                        if (source == "") {
-                                // KOBRA_LOG_FUNC(Log::ERROR)
-                                //         << "Failed to locate included file: "
-                                //         << match[1].str() << std::endl;
-                                continue;
-                        }
-
-			// std::string path = KOBRA_SHADER_INCLUDE_DIR + match[1].str();
-			// std::string source = common::read_file(path);
-
-                        // TODO: add self's directory to paths
-
-			// Replace the include with the file contents
-			out += preprocess(source, defines, paths);
-
-			// TODO: allow simoultaneous features
-			// e.g. add the includes file lines into the stream...
-		} else if (line.find("${") != std::string::npos) {
-			// Replace the define
-			for (auto &define : defines) {
-				std::string key = "${" + define.first + "}";
-				std::string value = define.second;
-
-				// Replace all instances of the key with the value
-				size_t pos = 0;
-				while ((pos = line.find(key, pos)) != std::string::npos) {
-					line.replace(pos, key.length(), value);
-					pos += value.length();
-				}
-			}
-
-			out += line + "\n";
-		} else {
-			out += line + "\n";
-		}
-	}
-
-	return out;
-}
-
-static _compile_out glsl_to_spriv(const std::string &source,
-		const std::map <std::string, std::string> &defines,
-                const std::set <std::string> &paths,
-		const vk::ShaderStageFlagBits &shader_type)
-{
-        // Get possible include paths
-        std::set <std::string> include_paths = paths;
-
-        // Get the directory of the source file
-	// std::string source_copy = preprocess(source, defines, include_paths);
-
 	// Output
 	_compile_out out;
 
@@ -2403,7 +2267,6 @@ static _compile_out glsl_to_spriv(const std::string &source,
 
 	glslang::TShader shader(stage);
 
-	// TODO: client as well later on
 	shader.setEnvTarget(glslang::EShTargetLanguage::EShTargetSpv, glslang::EShTargetLanguageVersion::EShTargetSpv_1_6);
 	shader.setStrings(shaderStrings, 1);
 
@@ -2411,9 +2274,9 @@ static _compile_out glsl_to_spriv(const std::string &source,
 	EShMessages messages = (EShMessages) (EShMsgDefault | EShMsgSpvRules | EShMsgVulkanRules);
 
 	// Include directories
-	standalone::DirStackFileIncluder includer;
-	// TODO: configure this later
-	includer.pushExternalLocalDirectory("../shaders");
+	standalone::DirectoryIncluder includer;
+	for (const auto &path : paths)
+		includer.include(path);
 
 	// ShaderIncluder includer;
 	if (!shader.parse(GetDefaultResources(), 450, false, messages, includer)) {
@@ -2463,17 +2326,20 @@ static void destroy_shader_module(const vk::Device &device, const vk::ShaderModu
 using ShaderModuleReturnProxy = DeviceReturnProxy <vk::ShaderModule, destroy_shader_module>;
 
 // Compile shader
-inline ShaderModuleReturnProxy compile(const vk::Device &device,
-		const std::string &source,
-		const vk::ShaderStageFlagBits &shader_type,
-		const Defines &defines = {},
-		const Includes &includes = {})
+inline ShaderModuleReturnProxy compile
+(
+	const vk::Device &device,
+	const std::string &source,
+	const vk::ShaderStageFlagBits &shader_type,
+	const Includes &includes = {},
+	const Defines &defines = {}
+)
 {
 	// Check that file exists
 	glslang::InitializeProcess();
 
 	// Compile shader
-	_compile_out out = glsl_to_spriv(source, defines, includes, shader_type);
+	_compile_out out = glsl_to_spriv(source, includes, defines, shader_type);
 	if (!out.log.empty()) {
 		// TODO: show the errornous line(s)
 		microlog::error("shader", "Shader compilation failed:\n%s\nSource:\n%s",
@@ -2490,18 +2356,21 @@ inline ShaderModuleReturnProxy compile(const vk::Device &device,
         return device.createShaderModule(create_info);
 }
 
-inline ShaderModuleReturnProxy compile(const vk::Device &device,
-		const std::filesystem::path &path,
-		const vk::ShaderStageFlagBits &shader_type,
-		const Defines &defines = {},
-		const Includes &includes = {})
+inline ShaderModuleReturnProxy compile
+(
+	const vk::Device &device,
+	const std::filesystem::path &path,
+	const vk::ShaderStageFlagBits &shader_type,
+	const Includes &includes = {},
+	const Defines &defines = {}
+)
 {
 	// Check that file exists
 	glslang::InitializeProcess();
 
 	// Compile shader
-	std::string source = read_file(path);
-	_compile_out out = glsl_to_spriv(source, defines, includes, shader_type);
+	std::string source = standalone::read_file(path);
+	_compile_out out = glsl_to_spriv(source, includes, defines, shader_type);
 	if (!out.log.empty()) {
 		// TODO: show the errornous line(s)
 		microlog::error("shader", "Shader compilation failed:\n%s\nSource:\n%s",
