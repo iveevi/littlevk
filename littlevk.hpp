@@ -122,7 +122,7 @@ struct Extensions {
 // Standalone utils, imported from other sources
 namespace standalone {
 
-inline const std::string read_file(const std::filesystem::path &path)
+inline const std::string readfile(const std::filesystem::path &path)
 {
 	std::ifstream f(path);
 	if (!f.good()) {
@@ -1013,6 +1013,26 @@ using RenderPassReturnProxy = DeviceReturnProxy <vk::RenderPass, destroy_render_
 inline RenderPassReturnProxy render_pass(const vk::Device &device, const vk::RenderPassCreateInfo &info)
 {
 	vk::RenderPass render_pass;
+	if (device.createRenderPass(&info, nullptr, &render_pass) != vk::Result::eSuccess)
+		return  true;
+
+	return std::move(render_pass);
+}
+
+inline RenderPassReturnProxy render_pass
+(
+	const vk::Device &device,
+	const vk::ArrayProxyNoTemporaries <vk::AttachmentDescription> &descriptions,
+	const vk::ArrayProxyNoTemporaries <vk::SubpassDescription> &subpasses,
+	const vk::ArrayProxyNoTemporaries <vk::SubpassDependency> &dependencies
+)
+{
+	vk::RenderPass render_pass;
+	vk::RenderPassCreateInfo info {
+		{},
+		descriptions, subpasses, dependencies
+	};
+
 	if (device.createRenderPass(&info, nullptr, &render_pass) != vk::Result::eSuccess)
 		return  true;
 
@@ -2369,11 +2389,11 @@ inline ShaderModuleReturnProxy compile
 	glslang::InitializeProcess();
 
 	// Compile shader
-	std::string source = standalone::read_file(path);
+	std::string source = standalone::readfile(path);
 	_compile_out out = glsl_to_spriv(source, includes, defines, shader_type);
 	if (!out.log.empty()) {
 		// TODO: show the errornous line(s)
-		microlog::error("shader", "Shader compilation failed:\n%s\nSource:\n%s",
+		microlog::error(__FUNCTION__, "Shader compilation failed:\n%s\nSource:\n%s",
 				out.log.c_str(), fmt_lines(out.source).c_str());
 		return true;
 	}
@@ -2416,6 +2436,7 @@ struct GraphicsCreateInfo {
 
 	vk::PipelineLayout pipeline_layout;
 	vk::RenderPass render_pass;
+	uint32_t subpass;
 };
 
 inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreateInfo &info)
@@ -2526,6 +2547,7 @@ inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreat
 			&dynamic_state,
 			info.pipeline_layout,
 			info.render_pass,
+			info.subpass
 		}
 	).value;
 }
@@ -2613,42 +2635,64 @@ struct Pipeline {
 };
 
 // General purpose pipeline compiler
-template <typename Layout>
-struct PipelineCompiler {
-	// TODO: option to use compute pipeline instead
-
+struct PipelineAssembler {
 	// Essential
 	vk::Device device;
 	littlevk::Window *window;
 	littlevk::Deallocator *dal;
 
-	// Builder
+	// Render pass
 	vk::RenderPass render_pass;
+	uint32_t subpass;
+
+	// Vertex information
+	vk::VertexInputBindingDescription vertex_binding;
+	std::vector <vk::VertexInputAttributeDescription> vertex_attributes;
+
+	// Shader information
 	ShaderStageBundle bundle;
 
+	// Pipeline layout information
 	std::vector <vk::DescriptorSetLayoutBinding> dsl_bindings;
 	std::vector <vk::PushConstantRange> push_constants;
 	
-	PipelineCompiler(const vk::Device &device, littlevk::Window *window, littlevk::Deallocator *dal)
-			: device(device), window(window), dal(dal), bundle(device, dal) {}
+	PipelineAssembler(const vk::Device &device_, littlevk::Window *window_, littlevk::Deallocator *dal_)
+			: device(device_), window(window_), dal(dal_), subpass(0), bundle(device_, dal_) {}
 
-	PipelineCompiler &with_render_pass(const vk::RenderPass &rp) {
-		render_pass = rp;
+	PipelineAssembler &with_render_pass(const vk::RenderPass &render_pass_, uint32_t subpass_) {
+		render_pass = render_pass_;
+		subpass = subpass_;
+		return *this;
+	}
+
+	template <typename ... Args>
+	PipelineAssembler &with_vertex_layout(const VertexLayout <Args...> &) {
+		using layout = VertexLayout <Args...>;
+		vertex_binding = layout::binding;
+		vertex_attributes = std::vector <vk::VertexInputAttributeDescription>
+		        	(layout::attributes.begin(), layout::attributes.end());
 		return *this;
 	}
 	
-	PipelineCompiler &with_shader_bundle(const ShaderStageBundle &sb) {
+	PipelineAssembler &with_shader_bundle(const ShaderStageBundle &sb) {
 		bundle = sb;
 		return *this;
 	}
 
-	PipelineCompiler &with_dsl_binding(uint32_t binding, uint32_t count, vk::DescriptorType type, vk::ShaderStageFlagBits stage) {
-		dsl_bindings.push_back({ binding, type, count, stage });
+	PipelineAssembler &with_dsl_binding(uint32_t binding, vk::DescriptorType type, uint32_t count, vk::ShaderStageFlagBits stage) {
+		dsl_bindings.emplace_back(binding, type, count, stage);
+		return *this;
+	}
+
+	template <size_t N>
+	PipelineAssembler &with_dsl_bindings(const std::array <vk::DescriptorSetLayoutBinding, N> &bindings) {
+		for (const auto &binding : bindings)
+			dsl_bindings.push_back(binding);
 		return *this;
 	}
 
 	template <typename T>
-	PipelineCompiler &with_push_constant(vk::ShaderStageFlagBits stage) {
+	PipelineAssembler &with_push_constant(vk::ShaderStageFlagBits stage) {
 		push_constants.push_back(vk::PushConstantRange { stage, 0, sizeof(T) });
 		return *this;
 	}
@@ -2679,11 +2723,12 @@ struct PipelineCompiler {
 		littlevk::pipeline::GraphicsCreateInfo pipeline_info;
 
 		pipeline_info.shader_stages = bundle.stages;
-		pipeline_info.vertex_binding = Layout::binding;
-		pipeline_info.vertex_attributes = Layout::attributes;
+		pipeline_info.vertex_binding = vertex_binding;
+		pipeline_info.vertex_attributes = vertex_attributes;
 		pipeline_info.extent = window->extent;
 		pipeline_info.pipeline_layout = pipeline.layout;
 		pipeline_info.render_pass = render_pass;
+		pipeline_info.subpass = subpass;
 		pipeline_info.fill_mode = vk::PolygonMode::eFill;
 		pipeline_info.cull_mode = vk::CullModeFlagBits::eNone;
 		pipeline_info.dynamic_viewport = true;
