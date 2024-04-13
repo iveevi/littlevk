@@ -126,7 +126,7 @@ inline const std::string readfile(const std::filesystem::path &path)
 {
 	std::ifstream f(path);
 	if (!f.good()) {
-		printf("Could not open file: %s\n", path.c_str());
+		microlog::error(__FUNCTION__, "Could not open file: %s\n", path.c_str());
 		return "";
 	}
 
@@ -569,6 +569,8 @@ inline vk::SurfaceKHR make_surface(const Window &window)
 		window.handle, nullptr, &surface
 	);
 
+	microlog::assertion(result == VK_SUCCESS, __FUNCTION__, "Failed to create a surface\n");
+
 	return static_cast <vk::SurfaceKHR> (surface);
 }
 
@@ -591,7 +593,6 @@ inline uint32_t find_graphics_queue_family(const vk::PhysicalDevice &phdev)
 	}
 
 	// If none found, throw an error
-	// KOBRA_LOG_FUNC(Log::ERROR) << "No graphics queue family found\n";
 	throw std::runtime_error("[Vulkan] No graphics queue family found");
 }
 
@@ -881,13 +882,13 @@ using FramebufferSetReturnProxy = DeviceReturnProxy <std::vector <vk::Framebuffe
 
 // Generate framebuffer from swapchain, render pass and optional depth buffer
 struct FramebufferSetInfo {
-	// TODO: const ref?
 	const Swapchain &swapchain;
 	const vk::RenderPass &render_pass;
 	vk::Extent2D extent;
 	std::optional <std::reference_wrapper <vk::ImageView>> depth_buffer;
 };
 
+[[deprecated("Use the FramebufferGenerator utility instead")]]
 inline FramebufferSetReturnProxy framebuffers(const vk::Device &device, const FramebufferSetInfo &info)
 {
 	std::vector <vk::Framebuffer> framebuffers;
@@ -908,6 +909,41 @@ inline FramebufferSetReturnProxy framebuffers(const vk::Device &device, const Fr
 	return framebuffers;
 }
 
+// TODO: template render pass assembler to check with the attachments?
+// Framebuffer generator wrapper
+struct FramebufferGenerator {
+	const vk::Device &device;
+	const vk::RenderPass &render_pass;
+	vk::Extent2D extent;
+	Deallocator *dal;
+
+	std::vector <vk::Framebuffer> framebuffers;
+
+	FramebufferGenerator(const vk::Device &device_, const vk::RenderPass &render_pass_,
+		const vk::Extent2D &extent_, Deallocator *dal_)
+			: device(device_), render_pass(render_pass_), extent(extent_), dal(dal_) {}
+
+	template <typename ... Args>
+	requires (std::is_trivially_constructible_v <vk::ImageView, Args> && ...)
+	void add(const Args & ... args) {
+		std::array <vk::ImageView, sizeof...(Args)> views { args... };
+
+		vk::FramebufferCreateInfo info {
+			{}, render_pass, views,
+			extent.width, extent.height, 1
+		};
+
+		FramebufferReturnProxy ret = device.createFramebuffer(info);
+		framebuffers.push_back(ret.unwrap(dal));
+	}
+
+	std::vector <vk::Framebuffer> unpack() {
+		auto ret = framebuffers;
+		framebuffers.clear();
+		return ret;
+	}
+};
+
 // Vulkan description/create info wrappers
 struct AttachmentDescription {
 	vk::Format              m_format;
@@ -919,7 +955,7 @@ struct AttachmentDescription {
 	vk::ImageLayout         m_initial_layout;
 	vk::ImageLayout         m_final_layout;
 
-	operator vk::AttachmentDescription() const {
+	constexpr operator vk::AttachmentDescription() const {
 		return vk::AttachmentDescription(
 			{},
 			m_format,
@@ -933,50 +969,49 @@ struct AttachmentDescription {
 		);
 	}
 
-	// TODO: ref qualifier correction...
-	AttachmentDescription &format(vk::Format format) {
+	constexpr AttachmentDescription &format(vk::Format format) {
 		this->m_format = format;
 		return *this;
 	}
 
-	AttachmentDescription &samples(vk::SampleCountFlagBits samples) {
+	constexpr AttachmentDescription &samples(vk::SampleCountFlagBits samples) {
 		this->m_samples = samples;
 		return *this;
 	}
 
-	AttachmentDescription &load_op(vk::AttachmentLoadOp load_op) {
+	constexpr AttachmentDescription &load_op(vk::AttachmentLoadOp load_op) {
 		this->m_load_op = load_op;
 		return *this;
 	}
 
-	AttachmentDescription &store_op(vk::AttachmentStoreOp store_op) {
+	constexpr AttachmentDescription &store_op(vk::AttachmentStoreOp store_op) {
 		this->m_store_op = store_op;
 		return *this;
 	}
 
-	AttachmentDescription &stencil_load_op(vk::AttachmentLoadOp stencil_load_op) {
+	constexpr AttachmentDescription &stencil_load_op(vk::AttachmentLoadOp stencil_load_op) {
 		this->m_stencil_load_op = stencil_load_op;
 		return *this;
 	}
 
-	AttachmentDescription &stencil_store_op(vk::AttachmentStoreOp stencil_store_op) {
+	constexpr AttachmentDescription &stencil_store_op(vk::AttachmentStoreOp stencil_store_op) {
 		this->m_stencil_store_op = stencil_store_op;
 		return *this;
 	}
 
-	AttachmentDescription &initial_layout(vk::ImageLayout initial_layout) {
+	constexpr AttachmentDescription &initial_layout(vk::ImageLayout initial_layout) {
 		this->m_initial_layout = initial_layout;
 		return *this;
 	}
 
-	AttachmentDescription &final_layout(vk::ImageLayout final_layout) {
+	constexpr AttachmentDescription &final_layout(vk::ImageLayout final_layout) {
 		this->m_final_layout = final_layout;
 		return *this;
 	}
 };
 
 // Preset attachment descriptions
-inline AttachmentDescription default_color_attachment(const vk::Format &swapchain_format)
+constexpr AttachmentDescription default_color_attachment(const vk::Format &swapchain_format)
 {
 	return AttachmentDescription()
 		.format(swapchain_format)
@@ -989,7 +1024,7 @@ inline AttachmentDescription default_color_attachment(const vk::Format &swapchai
 		.final_layout(vk::ImageLayout::ePresentSrcKHR);
 }
 
-inline AttachmentDescription default_depth_attachment()
+constexpr AttachmentDescription default_depth_attachment()
 {
 	return AttachmentDescription()
 		.format(vk::Format::eD32Sfloat)
@@ -1039,50 +1074,77 @@ inline RenderPassReturnProxy render_pass
 	return std::move(render_pass);
 }
 
-inline RenderPassReturnProxy default_color_render_pass(const vk::Device &device, const vk::Format &format)
-{
-	std::array <vk::AttachmentDescription, 1> attachments {
-		default_color_attachment(format)
+// Render pass assembly
+struct RenderPassAssembler {
+	const vk::Device &device;
+	// TODO: alternative to pointer?
+	littlevk::Deallocator *dal;
+
+	std::vector <vk::SubpassDescription> subpasses;
+	std::vector <vk::AttachmentDescription> attachments;
+	std::vector <vk::SubpassDependency> dependencies;
+
+	RenderPassAssembler(const vk::Device &device_, littlevk::Deallocator *dal_)
+			: device(device_), dal(dal_) {}
+
+	// TODO: use a tuple builder or so to ctime record the attachments and verifying everything
+	RenderPassAssembler &add_attachment(const vk::AttachmentDescription &description) {
+		attachments.push_back(description);
+		return *this;
+	}
+
+	struct SubpassAssembler {
+		RenderPassAssembler &parent;
+
+		vk::PipelineBindPoint bindpoint;
+
+		std::vector <vk::AttachmentReference> inputs;
+		std::vector <vk::AttachmentReference> colors;
+		std::optional <vk::AttachmentReference> depth = {};
+
+		SubpassAssembler(RenderPassAssembler &parent_, const vk::PipelineBindPoint &bindpoint_)
+				: parent(parent_), bindpoint(bindpoint_) {}
+
+		SubpassAssembler &input_attachment(uint32_t attachment, vk::ImageLayout layout) {
+			inputs.emplace_back(attachment, layout);
+			return *this;
+		}
+
+		SubpassAssembler &color_attachment(uint32_t attachment, vk::ImageLayout layout) {
+			colors.emplace_back(attachment, layout);
+			return *this;
+		}
+
+		SubpassAssembler &depth_attachment(uint32_t attachment, vk::ImageLayout layout) {
+			depth = vk::AttachmentReference(attachment, layout);
+			return *this;
+		}
+
+		RenderPassAssembler &done() {
+			// TODO: push this struct onto the rp assembler
+			parent.subpasses.push_back(vk::SubpassDescription {
+				{}, bindpoint,
+				inputs, colors,
+				{}, depth ? &(*depth) : nullptr, {}
+			});
+
+			return parent;
+		}
 	};
 
-	vk::SubpassDescription subpass {
-		{}, vk::PipelineBindPoint::eGraphics, 0, nullptr, 1, nullptr, nullptr, nullptr, 0, nullptr
-	};
+	SubpassAssembler add_subpass(const vk::PipelineBindPoint &bindpoint) {
+		return SubpassAssembler(*this, bindpoint);
+	}
 
-	vk::RenderPassCreateInfo info {
-		{}, attachments, subpass
-	};
+	RenderPassAssembler &add_dependency(uint32_t src, uint32_t dst, const vk::PipelineStageFlags &src_mask, const vk::PipelineStageFlags &dst_mask) {
+		dependencies.emplace_back(src, dst, src_mask, dst_mask);
+		return *this;
+	}
 
-	return render_pass(device, info);
-}
-
-inline RenderPassReturnProxy default_color_depth_render_pass(const vk::Device &device, const vk::Format &format)
-{
-	std::array <vk::AttachmentDescription, 2> attachments {
-		default_color_attachment(format),
-		default_depth_attachment()
-	};
-
-	vk::AttachmentReference color_attachment {
-		0, vk::ImageLayout::eColorAttachmentOptimal
-	};
-
-	vk::AttachmentReference depth_attachment {
-		1, vk::ImageLayout::eDepthStencilAttachmentOptimal
-	};
-
-	vk::SubpassDescription subpass {
-		{}, vk::PipelineBindPoint::eGraphics,
-		{}, color_attachment,
-		{}, &depth_attachment
-	};
-
-	vk::RenderPassCreateInfo info {
-		{}, attachments, subpass
-	};
-
-	return render_pass(device, info);
-}
+	operator vk::RenderPass() {
+		return littlevk::render_pass(device, attachments, subpasses, dependencies).unwrap(dal);
+	}
+};
 
 // Vulkan render pass begin info wrapper
 template <size_t AttachmentCount>
@@ -1116,6 +1178,20 @@ struct RenderPassBeginInfo {
 		return std::move(*this);
 	}
 
+	template <typename ... Args>
+	requires std::is_constructible_v <vk::ClearColorValue, Args...>
+	RenderPassBeginInfo clear_color(size_t index, const Args &... args) && {
+		m_clear_values[index] = vk::ClearColorValue(args...);
+		return std::move(*this);
+	}
+
+	template <typename ... Args>
+	requires std::is_constructible_v <vk::ClearDepthStencilValue, Args...>
+	RenderPassBeginInfo clear_depth(size_t index, const Args &... args) && {
+		m_clear_values[index] = vk::ClearDepthStencilValue(args...);
+		return std::move(*this);
+	}
+
 	RenderPassBeginInfo clear_value(size_t index, vk::ClearValue clear_value) && {
 		m_clear_values[index] = clear_value;
 		return std::move(*this);
@@ -1125,12 +1201,15 @@ struct RenderPassBeginInfo {
 // Presets
 template <size_t AttachmentCount>
 inline RenderPassBeginInfo <AttachmentCount> default_rp_begin_info
-		(const vk::RenderPass &render_pass,
-		 const vk::Framebuffer &framebuffer,
-		 const vk::Extent2D &extent)
+(
+	const vk::RenderPass &render_pass,
+	const vk::Framebuffer &framebuffer,
+	const vk::Extent2D &extent
+)
 {
 	// Infers attachment layouts
-	static_assert(AttachmentCount == 1 || AttachmentCount == 2, "Can only infer up to two attachments");
+	static_assert(AttachmentCount == 1 || AttachmentCount == 2,
+		"Can only infer up to two attachments");
 
 	// 1: Color only
 	if constexpr (AttachmentCount == 1) {
@@ -1138,7 +1217,7 @@ inline RenderPassBeginInfo <AttachmentCount> default_rp_begin_info
 			.render_pass(render_pass)
 			.framebuffer(framebuffer)
 			.extent(extent)
-			.clear_value(0, vk::ClearColorValue(std::array <float, 4> { 0.0f, 0.0f, 0.0f, 1.0f }));
+			.clear_color(0, std::array <float, 4> { 0.0f, 0.0f, 0.0f, 1.0f });
 	}
 
 	// 2: Color + Depth
@@ -1147,16 +1226,18 @@ inline RenderPassBeginInfo <AttachmentCount> default_rp_begin_info
 			.render_pass(render_pass)
 			.framebuffer(framebuffer)
 			.extent(extent)
-			.clear_value(0, vk::ClearColorValue(std::array <float, 4> { 0.0f, 0.0f, 0.0f, 1.0f }))
-			.clear_value(1, vk::ClearDepthStencilValue(1.0f, 0));
+			.clear_color(0, std::array <float, 4> { 0.0f, 0.0f, 0.0f, 1.0f })
+			.clear_depth(1, 1.0f, 0);
 	}
 }
 
 template <size_t AttachmentCount>
 inline RenderPassBeginInfo <AttachmentCount> default_rp_begin_info
-		(const vk::RenderPass &render_pass,
-		 const vk::Framebuffer &framebuffer,
-		 const Window *window)
+(
+	const vk::RenderPass &render_pass,
+	const vk::Framebuffer &framebuffer,
+	const Window *window
+)
 {
 	return default_rp_begin_info <AttachmentCount> (render_pass, framebuffer, window->extent);
 }
@@ -1723,6 +1804,20 @@ struct ImageCreateInfo {
         vk::ImageUsageFlags usage;
 	vk::ImageAspectFlags aspect;
 	bool external;
+
+	constexpr ImageCreateInfo(uint32_t width_, uint32_t height_,
+		vk::Format format_, vk::ImageUsageFlags usage_,
+		vk::ImageAspectFlags aspect_, bool external_ = false)
+			: width(width_), height(height_),
+			format(format_), usage(usage_),
+			aspect(aspect_), external(external_) {}
+
+	constexpr ImageCreateInfo(vk::Extent2D extent,
+		vk::Format format_, vk::ImageUsageFlags usage_,
+		vk::ImageAspectFlags aspect_, bool external_ = false)
+			: width(extent.width), height(extent.height),
+			format(format_), usage(usage_),
+			aspect(aspect_), external(external_) {}
 };
 
 inline ImageReturnProxy image(const vk::Device &device, const ImageCreateInfo &info, const vk::PhysicalDeviceMemoryProperties &properties)
@@ -2182,14 +2277,14 @@ inline SamplerReturnProxy sampler(const vk::Device &device, const vk::SamplerCre
 }
 
 // Default sampler builder
-struct SamplerCompiler {
+struct SamplerAssembler {
 	const vk::Device &device;
 	Deallocator *const dal;
 
 	vk::Filter mag = vk::Filter::eLinear;
 	vk::Filter min = vk::Filter::eLinear;
 
-	SamplerCompiler(const vk::Device &device, Deallocator *const dal)
+	SamplerAssembler(const vk::Device &device, Deallocator *const dal)
 			: device(device), dal(dal) {}
 
 	operator vk::Sampler() const {
@@ -2201,18 +2296,153 @@ struct SamplerCompiler {
 			vk::SamplerAddressMode::eRepeat,
 			vk::SamplerAddressMode::eRepeat,
 			0.0f,
-			VK_FALSE,
+			vk::False,
 			1.0f,
-			VK_FALSE,
+			vk::False,
 			vk::CompareOp::eAlways,
 			0.0f, 0.0f,
 			vk::BorderColor::eIntOpaqueBlack,
-			VK_FALSE
+			vk::False
 		};
 
 		return sampler(device, info).unwrap(dal);
 	}
 };
+
+// Rebinder pattern to do all allocations at once, then unpack
+template <typename ... Args>
+struct linked_device_allocator : std::tuple <Args...> {
+	const vk::Device &device;
+	const vk::PhysicalDeviceMemoryProperties &properties;
+	littlevk::Deallocator *dal = nullptr;
+
+	constexpr linked_device_allocator(const vk::Device &device_,
+		const vk::PhysicalDeviceMemoryProperties &properties_,
+		littlevk::Deallocator *dal_,
+		const Args & ... args)
+			: std::tuple <Args...> (args...),
+			device(device_),
+			properties(properties_),
+			dal(dal_) {}
+
+	constexpr linked_device_allocator(const vk::Device &device_,
+		const vk::PhysicalDeviceMemoryProperties &properties_,
+		littlevk::Deallocator *dal_,
+		const std::tuple <Args...> &args)
+			: std::tuple <Args...> (args),
+			device(device_),
+			properties(properties_),
+			dal(dal_) {}
+
+	operator const auto &() const {
+		if constexpr (sizeof...(Args) == 1)
+			return std::get <0> (*this);
+		else
+			return *this;
+	}
+
+	template <typename ... InfoArgs>
+	requires std::is_constructible_v <ImageCreateInfo, InfoArgs...>
+	[[nodiscard]] linked_device_allocator <Args..., littlevk::Image>
+	image(const InfoArgs & ... args) {
+		ImageCreateInfo info(args...);
+		auto image = littlevk::image(device, info, properties).unwrap(dal);
+		auto new_values = std::tuple_cat((std::tuple <Args...>) *this, std::make_tuple(image));
+		return { device, properties, dal, new_values };
+	}
+
+	template <typename T>
+	[[nodiscard]] linked_device_allocator <Args..., littlevk::Buffer>
+	buffer(const std::vector <T> &vec, const vk::BufferUsageFlags &flags) {
+		auto buffer = littlevk::buffer(device, vec, flags, properties).unwrap(dal);
+		auto new_values = std::tuple_cat((std::tuple <Args...>) *this, std::make_tuple(buffer));
+		return { device, properties, dal, new_values };
+	}
+};
+
+// Starts with nothing
+constexpr linked_device_allocator <> bind
+(
+	const vk::Device &device,
+	const vk::PhysicalDeviceMemoryProperties &properties,
+	littlevk::Deallocator *dal
+)
+{
+	return { device, properties, dal };
+}
+
+struct linked_device_descriptor_pool {
+	const vk::Device &device;
+	const vk::DescriptorPool &pool;
+
+	[[nodiscard]]
+	std::vector <vk::DescriptorSet> allocateDescriptorSets(const vk::DescriptorSetLayout &dsl) const {
+		return device.allocateDescriptorSets(vk::DescriptorSetAllocateInfo { pool, dsl });
+	}
+};
+
+constexpr linked_device_descriptor_pool bind(const vk::Device &device, const vk::DescriptorPool &pool)
+{
+	return { device, pool };
+}
+
+// Descriptor set update structures
+struct DescriptorElementBase {
+	uint32_t element;
+};
+
+struct DescriptorImageElementInfo : vk::DescriptorImageInfo, DescriptorElementBase {
+	constexpr DescriptorImageElementInfo(const vk::Sampler &sampler, const vk::ImageView &view, const vk::ImageLayout &layout, uint32_t element = 0)
+			: vk::DescriptorImageInfo(sampler, view, layout),
+			DescriptorElementBase(element) {}
+};
+
+struct DescriptorBufferElementInfo : vk::DescriptorBufferInfo, DescriptorElementBase {
+	constexpr DescriptorBufferElementInfo(const vk::Buffer &buffer, uint32_t offset, uint32_t range, uint32_t element = 0)
+			: vk::DescriptorBufferInfo(buffer, offset, range),
+			DescriptorElementBase(element) {}
+};
+
+using DescriptorTypeElementInfo = std::variant <DescriptorImageElementInfo, DescriptorBufferElementInfo>;
+
+struct Visitor {
+	vk::WriteDescriptorSet &ref;
+
+	void operator()(const vk::DescriptorImageInfo &image_info) {
+		ref.pImageInfo = &image_info;
+	}
+
+	void operator()(const vk::DescriptorBufferInfo &buffer_info) {
+		ref.pBufferInfo = &buffer_info;
+	}
+};
+
+template <size_t N>
+void descriptor_set_update
+(
+	const vk::Device &device,
+	const vk::DescriptorSet &dset,
+	const std::array <vk::DescriptorSetLayoutBinding, N> &bindings,
+	const std::array <DescriptorTypeElementInfo, N> &infos
+)
+{
+	std::array <vk::WriteDescriptorSet, N> writes;
+	for (size_t i = 0; i < N; i++) {
+		const auto &binding = bindings[i];
+
+		// TODO: pass elements
+		writes[i] = vk::WriteDescriptorSet {
+			dset, binding.binding, 0,
+			binding.descriptorCount,
+			binding.descriptorType,
+			nullptr, nullptr, nullptr
+		};
+
+		std::visit(Visitor(writes[i]), infos[i]);
+	}
+
+	device.updateDescriptorSets(writes, nullptr);
+}
 
 namespace shader {
 
