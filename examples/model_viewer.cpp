@@ -347,6 +347,9 @@ int main(int argc, char *argv[])
 		.with_push_constant <MVP> (vk::ShaderStageFlagBits::eVertex);
 
 	// Link descriptor sets
+	// TODO: Needs a proper storage mechanism to offload without memory issues
+	// std::vector <vk::WriteDescriptorSet> writes;
+
 	for (auto &vk_mesh : vk_meshes) {
 		if (!vk_mesh.has_texture) {
 			if (glm::length(vk_mesh.albedo_color) < 1e-6f)
@@ -357,14 +360,15 @@ int main(int argc, char *argv[])
 
 		// Allocate a descriptor set for each mesh...
 		vk_mesh.descriptor_set = littlevk::bind(app.device, descriptor_pool)
-			.allocateDescriptorSets(*textured_ppl.dsl).front();
+			.allocate_descriptor_sets(*textured_ppl.dsl).front();
 
-		// TODO: builder type syntax to update
-		littlevk::descriptor_set_update(app.device, vk_mesh.descriptor_set, textured_dslbs, {
-				littlevk::DescriptorImageElementInfo(vk_mesh.albedo_sampler,
-						vk_mesh.albedo_image.view, vk::ImageLayout::eShaderReadOnlyOptimal)
-		});
+		littlevk::bind(app.device, vk_mesh.descriptor_set, textured_dslbs)
+			.update(0, 0, vk_mesh.albedo_sampler, vk_mesh.albedo_image.view, vk::ImageLayout::eShaderReadOnlyOptimal)
+			// .offload(writes);
+			.finalize();
 	}
+
+	// app.device.updateDescriptorSets(writes, nullptr);
 
 	// Syncronization primitives
 	auto sync = littlevk::present_syncronization(app.device, 2).unwrap(app.deallocator);

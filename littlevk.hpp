@@ -137,12 +137,11 @@ inline const std::string readfile(const std::filesystem::path &path)
 
 struct DirectoryIncluder : public glslang::TShader::Includer {
 	std::vector <std::string> directories;
-	// std::set <std::string> includedFiles;
 
 	DirectoryIncluder() = default;
 
 	IncludeResult *includeLocal(const char *header, const char *includer, size_t depth) override {
-		return readLocalPath(header, includer, (int) depth);
+		return read_local_path(header, includer, (int) depth);
 	}
 
 	IncludeResult *includeSystem(const char *header, const char *includer, size_t depth) override {
@@ -160,7 +159,7 @@ struct DirectoryIncluder : public glslang::TShader::Includer {
 		directories.push_back(dir);
 	}
 
-	IncludeResult *readLocalPath(const char *header, const char *includer, int depth) {
+	IncludeResult *read_local_path(const char *header, const char *includer, int depth) {
 		for (auto it = directories.rbegin(); it != directories.rend(); it++) {
 			std::string path = *it + '/' + header;
 			std::replace(path.begin(), path.end(), '\\', '/');
@@ -869,12 +868,6 @@ inline void destroy_swapchain(const vk::Device &device, Swapchain &swapchain)
 static void destroy_framebuffer(const vk::Device &device, const vk::Framebuffer &framebuffer)
 {
 	device.destroyFramebuffer(framebuffer);
-}
-
-static void destroy_framebuffer_set(const vk::Device &device, const std::vector <vk::Framebuffer> &framebuffers)
-{
-	for (const vk::Framebuffer &fb : framebuffers)
-		device.destroyFramebuffer(fb);
 }
 
 using FramebufferReturnProxy = DeviceReturnProxy <vk::Framebuffer, destroy_framebuffer>;
@@ -2343,7 +2336,7 @@ struct linked_device_descriptor_pool {
 	const vk::DescriptorPool &pool;
 
 	[[nodiscard]]
-	std::vector <vk::DescriptorSet> allocateDescriptorSets(const vk::DescriptorSetLayout &dsl) const {
+	std::vector <vk::DescriptorSet> allocate_descriptor_sets(const vk::DescriptorSetLayout &dsl) const {
 		return device.allocateDescriptorSets(vk::DescriptorSetAllocateInfo { pool, dsl });
 	}
 };
@@ -2354,61 +2347,60 @@ constexpr linked_device_descriptor_pool bind(const vk::Device &device, const vk:
 }
 
 // Descriptor set update structures
-struct DescriptorElementBase {
-	uint32_t element;
-};
+template <size_t N>
+struct linked_descriptor_updator {
+	const vk::Device &device;
+	const vk::DescriptorSet &dset;
+	const std::array <vk::DescriptorSetLayoutBinding, N> &bindings;
 
-struct DescriptorImageElementInfo : vk::DescriptorImageInfo, DescriptorElementBase {
-	constexpr DescriptorImageElementInfo(const vk::Sampler &sampler, const vk::ImageView &view, const vk::ImageLayout &layout, uint32_t element = 0)
-			: vk::DescriptorImageInfo(sampler, view, layout),
-			DescriptorElementBase(element) {}
-};
+	// Allow for arbitrarily many updates; enable partial/full updates
+	std::vector <vk::DescriptorImageInfo> image_infos;
+	std::vector <vk::DescriptorBufferInfo> buffer_infos;
+	std::vector <vk::WriteDescriptorSet> writes;
 
-struct DescriptorBufferElementInfo : vk::DescriptorBufferInfo, DescriptorElementBase {
-	constexpr DescriptorBufferElementInfo(const vk::Buffer &buffer, uint32_t offset, uint32_t range, uint32_t element = 0)
-			: vk::DescriptorBufferInfo(buffer, offset, range),
-			DescriptorElementBase(element) {}
-};
+	linked_descriptor_updator(const vk::Device &device_, const vk::DescriptorSet &dset_,
+		const std::array <vk::DescriptorSetLayoutBinding, N> &bindings_)
+			: device(device_), dset(dset_), bindings(bindings_) {}
 
-using DescriptorTypeElementInfo = std::variant <DescriptorImageElementInfo, DescriptorBufferElementInfo>;
-
-struct Visitor {
-	vk::WriteDescriptorSet &ref;
-
-	void operator()(const vk::DescriptorImageInfo &image_info) {
-		ref.pImageInfo = &image_info;
+	linked_descriptor_updator &update(uint32_t binding, uint32_t element,
+			const vk::Sampler &sampler, const vk::ImageView &view,
+			const vk::ImageLayout &layout) {
+		image_infos.emplace_back(sampler, view, layout);
+		writes.emplace_back(dset, binding, element,
+				bindings[binding].descriptorCount,
+				bindings[binding].descriptorType,
+				&image_infos.back());
+		return *this;
+	}
+	
+	linked_descriptor_updator &update(uint32_t binding, uint32_t element,
+			const vk::Buffer &buffer, uint32_t offset, uint32_t range) {
+		buffer_infos.emplace_back(buffer, offset, range);
+		writes.emplace_back(dset, binding, element,
+				bindings[binding].descriptorCount,
+				bindings[binding].descriptorType,
+				nullptr, &buffer_infos.back());
+		return *this;
 	}
 
-	void operator()(const vk::DescriptorBufferInfo &buffer_info) {
-		ref.pBufferInfo = &buffer_info;
+	void finalize() {
+		device.updateDescriptorSets(writes, nullptr);
+	}
+
+	void offload(std::vector <vk::WriteDescriptorSet> &other) {
+		other.insert(other.end(), writes.begin(), writes.end());
 	}
 };
 
 template <size_t N>
-void descriptor_set_update
+constexpr linked_descriptor_updator <N> bind
 (
-	const vk::Device &device,
+ 	const vk::Device &device,
 	const vk::DescriptorSet &dset,
-	const std::array <vk::DescriptorSetLayoutBinding, N> &bindings,
-	const std::array <DescriptorTypeElementInfo, N> &infos
+	const std::array <vk::DescriptorSetLayoutBinding, N> &bindings
 )
 {
-	std::array <vk::WriteDescriptorSet, N> writes;
-	for (size_t i = 0; i < N; i++) {
-		const auto &binding = bindings[i];
-
-		// TODO: pass elements
-		writes[i] = vk::WriteDescriptorSet {
-			dset, binding.binding, 0,
-			binding.descriptorCount,
-			binding.descriptorType,
-			nullptr, nullptr, nullptr
-		};
-
-		std::visit(Visitor(writes[i]), infos[i]);
-	}
-
-	device.updateDescriptorSets(writes, nullptr);
+	return { device, dset, bindings };
 }
 
 namespace shader {
@@ -2619,8 +2611,6 @@ struct GraphicsCreateInfo {
 	std::optional <vk::VertexInputBindingDescription> vertex_binding = std::nullopt;
 	std::optional <vk::ArrayProxy <vk::VertexInputAttributeDescription>> vertex_attributes = std::nullopt;
 
-	// vk::ShaderModule vertex_shader;
-	// vk::ShaderModule fragment_shader;
 	std::vector <vk::PipelineShaderStageCreateInfo> shader_stages;
 
 	vk::Extent2D extent;
