@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 project(littlevk CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 
 # Graphics libraries
 find_package(Vulkan REQUIRED)

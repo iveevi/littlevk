@@ -878,36 +878,6 @@ static void destroy_framebuffer_set(const vk::Device &device, const std::vector 
 }
 
 using FramebufferReturnProxy = DeviceReturnProxy <vk::Framebuffer, destroy_framebuffer>;
-using FramebufferSetReturnProxy = DeviceReturnProxy <std::vector <vk::Framebuffer>, destroy_framebuffer_set>;
-
-// Generate framebuffer from swapchain, render pass and optional depth buffer
-struct FramebufferSetInfo {
-	const Swapchain &swapchain;
-	const vk::RenderPass &render_pass;
-	vk::Extent2D extent;
-	std::optional <std::reference_wrapper <vk::ImageView>> depth_buffer;
-};
-
-[[deprecated("Use the FramebufferGenerator utility instead")]]
-inline FramebufferSetReturnProxy framebuffers(const vk::Device &device, const FramebufferSetInfo &info)
-{
-	std::vector <vk::Framebuffer> framebuffers;
-
-	for (const vk::ImageView &view : info.swapchain.image_views) {
-		std::vector <vk::ImageView> fb_views { view };
-		if (info.depth_buffer)
-			fb_views.emplace_back(*info.depth_buffer);
-
-		vk::FramebufferCreateInfo fb_info {
-			{}, info.render_pass, fb_views,
-			info.extent.width, info.extent.height, 1
-		};
-
-		framebuffers.emplace_back(device.createFramebuffer(fb_info));
-	}
-
-	return framebuffers;
-}
 
 // TODO: template render pass assembler to check with the attachments?
 // Framebuffer generator wrapper
@@ -1638,7 +1608,7 @@ inline uint32_t find_memory_type(const vk::PhysicalDeviceMemoryProperties &mem_p
 	return type_index;
 }
 
-inline BufferReturnProxy buffer(const vk::Device &device, size_t size, const vk::BufferUsageFlags &flags, const vk::PhysicalDeviceMemoryProperties &properties, bool external = false)
+inline BufferReturnProxy buffer(const vk::Device &device, const vk::PhysicalDeviceMemoryProperties &properties, size_t size, const vk::BufferUsageFlags &flags, bool external = false)
 {
         Buffer buffer;
 
@@ -1687,32 +1657,29 @@ inline BufferReturnProxy buffer(const vk::Device &device, size_t size, const vk:
 using FilledBufferReturnProxy = ComposedReturnProxy <Buffer>;
 
 template <typename T>
-inline FilledBufferReturnProxy buffer(const vk::Device &device, const std::vector <T> &vec, const vk::BufferUsageFlags &flags, const vk::PhysicalDeviceMemoryProperties &properties, bool external = false)
+inline FilledBufferReturnProxy buffer(const vk::Device &device, const vk::PhysicalDeviceMemoryProperties &properties, const std::vector <T> &vec, const vk::BufferUsageFlags &flags, bool external = false)
 {
 	DeallocationQueue dq;
-	Buffer buffer = littlevk::buffer
-	(
-	 	device,
-		vec.size() * sizeof(T),
-		flags, properties, external
-	).defer(dq);
-
+	Buffer buffer = littlevk::buffer(device, properties, vec.size() * sizeof(T), flags, external).defer(dq);
 	upload(device, buffer, vec);
 	return { buffer, dq };
 }
 
 template <typename T, size_t N>
-inline FilledBufferReturnProxy buffer(const vk::Device &device, const std::array <T, N> &vec, const vk::BufferUsageFlags &flags, const vk::PhysicalDeviceMemoryProperties &properties, bool external = false)
+inline FilledBufferReturnProxy buffer(const vk::Device &device, const vk::PhysicalDeviceMemoryProperties &properties, const std::array <T, N> &vec, const vk::BufferUsageFlags &flags, bool external = false)
 {
 	DeallocationQueue dq;
-	Buffer buffer = littlevk::buffer
-	(
-	 	device,
-		vec.size() * sizeof(T),
-		flags, properties, external
-	).defer(dq);
-
+	Buffer buffer = littlevk::buffer(device, properties, vec.size() * sizeof(T), flags, external).defer(dq);
 	upload(device, buffer, vec);
+	return { buffer, dq };
+}
+
+template <typename T>
+inline FilledBufferReturnProxy buffer(const vk::Device &device, const vk::PhysicalDeviceMemoryProperties &properties, const T *const data, size_t size, const vk::BufferUsageFlags &flags, bool external = false)
+{
+	DeallocationQueue dq;
+	Buffer buffer = littlevk::buffer(device, properties, size, flags, external).defer(dq);
+	upload(device, buffer, data);
 	return { buffer, dq };
 }
 
@@ -2350,11 +2317,11 @@ struct linked_device_allocator : std::tuple <Args...> {
 		auto new_values = std::tuple_cat((std::tuple <Args...>) *this, std::make_tuple(image));
 		return { device, properties, dal, new_values };
 	}
-
-	template <typename T>
+	
+	template <typename ... BufferArgs>
 	[[nodiscard]] linked_device_allocator <Args..., littlevk::Buffer>
-	buffer(const std::vector <T> &vec, const vk::BufferUsageFlags &flags) {
-		auto buffer = littlevk::buffer(device, vec, flags, properties).unwrap(dal);
+	buffer(const BufferArgs & ... args) {
+		auto buffer = littlevk::buffer(device, properties, args...).unwrap(dal);
 		auto new_values = std::tuple_cat((std::tuple <Args...>) *this, std::make_tuple(buffer));
 		return { device, properties, dal, new_values };
 	}
@@ -2784,6 +2751,23 @@ inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreat
 
 } // namespace pipeline
 
+// Pre defined Vulkan types; not intended for concrete usage
+struct r32f {
+	char _data[sizeof(float)];
+};
+
+struct rg32f {
+	char _data[2 * sizeof(float)];
+};
+
+struct rgb32f {
+	char _data[3 * sizeof(float)];
+};
+
+struct rgba32f {
+	char _data[4 * sizeof(float)];
+};
+
 // Easier vertex layout, using templates only
 template <typename T, typename ... Args>
 constexpr size_t sizeof_all()
@@ -2974,6 +2958,22 @@ struct PipelineAssembler {
 };
 
 }
+
+// Specializing formats
+template <>
+struct littlevk::type_translator <littlevk::rg32f, true> {
+	static constexpr vk::Format format = vk::Format::eR32G32Sfloat;
+};
+
+template <>
+struct littlevk::type_translator <littlevk::rgb32f, true> {
+	static constexpr vk::Format format = vk::Format::eR32G32B32Sfloat;
+};
+
+template <>
+struct littlevk::type_translator <littlevk::rgba32f, true> {
+	static constexpr vk::Format format = vk::Format::eR32G32B32A32Sfloat;
+};
 
 // Specializing for GLM types if defined
 #ifdef LITTLEVK_GLM_TRANSLATOR

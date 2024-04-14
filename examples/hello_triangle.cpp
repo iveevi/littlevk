@@ -26,66 +26,48 @@ void main() {
 }
 )";
 
+// Vertex buffer; position (2) and color (3)
+constexpr float triangles[][5] {
+	{  0.0f, -0.5f, 1.0f, 0.0f, 0.0f },
+	{  0.5f,  0.5f, 0.0f, 1.0f, 0.0f },
+	{ -0.5f,  0.5f, 0.0f, 0.0f, 1.0f },
+};
+
 int main()
 {
+	// Vulkan device extensions
+	static const std::vector <const char *> EXTENSIONS {
+		VK_KHR_SWAPCHAIN_EXTENSION_NAME
+	};
+
 	// Load Vulkan physical device
 	auto predicate = [](const vk::PhysicalDevice &dev) {
-		return littlevk::physical_device_able(dev,  {
-			VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-		});
+		return littlevk::physical_device_able(dev, EXTENSIONS);
 	};
 
 	vk::PhysicalDevice phdev = littlevk::pick_physical_device(predicate);
+	vk::PhysicalDeviceMemoryProperties memory_properties = phdev.getMemoryProperties();
 
 	// Create an application skeleton with the bare minimum
 	littlevk::Skeleton app;
-	app.skeletonize(phdev, { 800, 600 }, "Hello Triangle");
+	app.skeletonize(phdev, { 800, 600 }, "Hello Triangle", EXTENSIONS);
 
 	// Create a deallocator for automatic resource cleanup
 	auto deallocator = new littlevk::Deallocator { app.device };
 
 	// Create a render pass
-	std::array <vk::AttachmentDescription, 1> attachments {
-		vk::AttachmentDescription {
-			{},
-			app.swapchain.format,
-			vk::SampleCountFlagBits::e1,
-			vk::AttachmentLoadOp::eClear,
-			vk::AttachmentStoreOp::eStore,
-			vk::AttachmentLoadOp::eDontCare,
-			vk::AttachmentStoreOp::eDontCare,
-			vk::ImageLayout::eUndefined,
-			vk::ImageLayout::ePresentSrcKHR,
-		}
-	};
-
-	std::array <vk::AttachmentReference, 1> color_attachments {
-		vk::AttachmentReference {
-			0,
-			vk::ImageLayout::eColorAttachmentOptimal,
-		}
-	};
-
-	vk::SubpassDescription subpass {
-		{}, vk::PipelineBindPoint::eGraphics,
-		{}, color_attachments,
-		{}, nullptr
-	};
-
-	vk::RenderPass render_pass = littlevk::render_pass(
-		app.device,
-		vk::RenderPassCreateInfo {
-			{}, attachments, subpass
-		}
-	).unwrap(deallocator);
+	vk::RenderPass render_pass = littlevk::RenderPassAssembler(app.device, deallocator)
+		.add_attachment(littlevk::default_color_attachment(app.swapchain.format))
+		.add_subpass(vk::PipelineBindPoint::eGraphics)
+			.color_attachment(0, vk::ImageLayout::eColorAttachmentOptimal)
+			.done();
 
 	// Create framebuffers from the swapchain
-	littlevk::FramebufferSetInfo fb_info;
-	fb_info.swapchain = &app.swapchain;
-	fb_info.render_pass = render_pass;
-	fb_info.extent = app.window->extent;
+	littlevk::FramebufferGenerator generator(app.device, render_pass, app.window->extent, deallocator);
+	for (const auto &view : app.swapchain.image_views)
+		generator.add(view);
 
-	auto framebuffers = littlevk::framebuffers(app.device, fb_info).unwrap(deallocator);
+	std::vector <vk::Framebuffer> framebuffers = generator.unpack();
 
 	// Allocate command buffers
 	vk::CommandPool command_pool = littlevk::command_pool(app.device,
@@ -95,93 +77,40 @@ int main()
 		}
 	).unwrap(deallocator);
 
-	auto command_buffers = app.device.allocateCommandBuffers({
-		command_pool, vk::CommandBufferLevel::ePrimary, 2
-	});
+	auto command_buffers = app.device.allocateCommandBuffers
+		({ command_pool, vk::CommandBufferLevel::ePrimary, 2 });
 
 	// Allocate triangle vertex buffer
-	struct Vertex {
-		float position[2];
-		float color[3];
-
-		// Bindings and attributes
-		static constexpr vk::VertexInputBindingDescription binding() {
-			return {
-				0, sizeof(Vertex), vk::VertexInputRate::eVertex
-			};
-		}
-
-		static constexpr std::array <vk::VertexInputAttributeDescription, 2> attributes() {
-			return {
-				vk::VertexInputAttributeDescription {
-					0, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, position)
-				},
-				vk::VertexInputAttributeDescription {
-					1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color)
-				}
-			};
-		}
-	};
-
-	constexpr Vertex triangle[] {
-		{ {  0.0f, -0.5f }, { 1.0f, 0.0f, 0.0f } },
-		{ {  0.5f,  0.5f }, { 0.0f, 1.0f, 0.0f } },
-		{ { -0.5f,  0.5f }, { 0.0f, 0.0f, 1.0f } },
-	};
-
-	vk::PhysicalDeviceMemoryProperties mem_props = phdev.getMemoryProperties();
-
-	littlevk::Buffer vertex_buffer = littlevk::buffer(
-		app.device,
-		sizeof(triangle),
-		vk::BufferUsageFlagBits::eVertexBuffer,
-		mem_props
-	).unwrap(deallocator);
-
-	littlevk::upload(app.device, vertex_buffer, triangle);
-
-	// Compile shader modules
-	vk::ShaderModule vertex_module = littlevk::shader::compile(
-		app.device, vertex_shader_source,
-		vk::ShaderStageFlagBits::eVertex
-	).unwrap(deallocator);
-
-	vk::ShaderModule fragment_module = littlevk::shader::compile(
-		app.device, fragment_shader_source,
-		vk::ShaderStageFlagBits::eFragment
-	).unwrap(deallocator);
+	littlevk::Buffer vertex_buffer = littlevk::bind(app.device, memory_properties, deallocator)
+		.buffer(triangles, sizeof(triangles), vk::BufferUsageFlagBits::eVertexBuffer);
 
 	// Create a graphics pipeline
-	vk::PipelineLayout pipeline_layout = littlevk::pipeline_layout(
-		app.device,
-		vk::PipelineLayoutCreateInfo {
-			{}, 0, nullptr, 0, nullptr
-		}
-	).unwrap(deallocator);
+	auto vertex_layout = littlevk::VertexLayout <littlevk::rg32f, littlevk::rgb32f> ();
 
-	littlevk::pipeline::GraphicsCreateInfo pipeline_info;
-	pipeline_info.vertex_binding = Vertex::binding();
-	pipeline_info.vertex_attributes = Vertex::attributes();
-	pipeline_info.vertex_shader = vertex_module;
-	pipeline_info.fragment_shader = fragment_module;
-	pipeline_info.extent = app.window->extent;
-	pipeline_info.pipeline_layout = pipeline_layout;
-	pipeline_info.render_pass = render_pass;
-	pipeline_info.dynamic_viewport = true;
+	auto bundle = littlevk::ShaderStageBundle(app.device, deallocator)
+		.attach(vertex_shader_source, vk::ShaderStageFlagBits::eVertex)
+		.attach(fragment_shader_source, vk::ShaderStageFlagBits::eFragment);
 
-	vk::Pipeline pipeline = littlevk::pipeline::compile(app.device, pipeline_info).unwrap(deallocator);
+	littlevk::Pipeline ppl = littlevk::PipelineAssembler(app.device, app.window, deallocator)
+		.with_render_pass(render_pass, 0)
+		.with_vertex_layout(vertex_layout)
+		.with_shader_bundle(bundle);
 
 	// Syncronization primitives
 	auto sync = littlevk::present_syncronization(app.device, 2).unwrap(deallocator);
 
 	auto resize = [&]() {
 		app.resize();
-		fb_info.extent = app.window->extent;
-		framebuffers = littlevk::framebuffers(app.device, fb_info).unwrap(deallocator);
+
+		// We can use the same generator; unpack() clears previously made framebuffers
+		generator.extent = app.window->extent;
+		for (const auto &view : app.swapchain.image_views)
+			generator.add(view);
+
+		framebuffers = generator.unpack();
 	};
 
 	// TODO: text render framerate
-
 	// Render loop
         uint32_t frame = 0;
         while (true) {
@@ -197,30 +126,31 @@ int main()
 		}
 
 		// Start the render pass
-		const auto &rpbi = littlevk::default_rp_begin_info <2> (render_pass, framebuffers[op.index], app.window);
-
-		command_buffers[frame].begin(vk::CommandBufferBeginInfo {});
+		const auto &cmd = command_buffers[frame];
+		cmd.begin(vk::CommandBufferBeginInfo {});
 
 		// Set viewport and scissor
-		littlevk::viewport_and_scissor(command_buffers[frame], littlevk::RenderArea(app.window));
+		littlevk::viewport_and_scissor(cmd, littlevk::RenderArea(app.window));
+		
+		const auto &rpbi = littlevk::default_rp_begin_info <1>
+			(render_pass, framebuffers[op.index], app.window);
 
-		command_buffers[frame].beginRenderPass(rpbi, vk::SubpassContents::eInline);
+		cmd.beginRenderPass(rpbi, vk::SubpassContents::eInline);
 
 		// Render the triangle
-		command_buffers[frame].bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
-		command_buffers[frame].bindVertexBuffers(0, vertex_buffer.buffer, { 0 });
-		command_buffers[frame].draw(3, 1, 0, 0);
+		cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, ppl.handle);
+		cmd.bindVertexBuffers(0, vertex_buffer.buffer, { 0 });
+		cmd.draw(3, 1, 0, 0);
 
-		command_buffers[frame].endRenderPass();
-		command_buffers[frame].end();
+		cmd.endRenderPass();
+		cmd.end();
 
 		// Submit command buffer while signaling the semaphore
-		vk::PipelineStageFlags wait_stage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+		constexpr vk::PipelineStageFlags wait_stage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
 
 		vk::SubmitInfo submit_info {
 			sync.image_available[frame],
-			wait_stage,
-			command_buffers[frame],
+			wait_stage, cmd,
 			sync.render_finished[frame]
 		};
 
