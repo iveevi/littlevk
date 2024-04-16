@@ -889,7 +889,7 @@ struct FramebufferGenerator {
 	template <typename ... Args>
 	requires (std::is_trivially_constructible_v <vk::ImageView, Args> && ...)
 	void add(const Args & ... args) {
-		std::array <vk::ImageView, sizeof...(Args)> views { args... };
+		const std::array <vk::ImageView, sizeof...(Args)> views { args... };
 
 		vk::FramebufferCreateInfo info {
 			{}, render_pass, views,
@@ -1601,7 +1601,14 @@ inline uint32_t find_memory_type(const vk::PhysicalDeviceMemoryProperties &mem_p
 	return type_index;
 }
 
-inline BufferReturnProxy buffer(const vk::Device &device, const vk::PhysicalDeviceMemoryProperties &properties, size_t size, const vk::BufferUsageFlags &flags, bool external = false)
+inline BufferReturnProxy buffer
+(
+	const vk::Device &device,
+	const vk::PhysicalDeviceMemoryProperties &properties,
+	size_t size,
+	const vk::BufferUsageFlags &flags,
+	bool external = false
+)
 {
         Buffer buffer;
 
@@ -1650,7 +1657,13 @@ inline BufferReturnProxy buffer(const vk::Device &device, const vk::PhysicalDevi
 using FilledBufferReturnProxy = ComposedReturnProxy <Buffer>;
 
 template <typename T>
-inline FilledBufferReturnProxy buffer(const vk::Device &device, const vk::PhysicalDeviceMemoryProperties &properties, const std::vector <T> &vec, const vk::BufferUsageFlags &flags, bool external = false)
+inline FilledBufferReturnProxy buffer
+(
+	const vk::Device &device, const vk::PhysicalDeviceMemoryProperties &properties,
+	const std::vector <T> &vec,
+	const vk::BufferUsageFlags &flags,
+	bool external = false
+)
 {
 	DeallocationQueue dq;
 	Buffer buffer = littlevk::buffer(device, properties, vec.size() * sizeof(T), flags, external).defer(dq);
@@ -1659,7 +1672,14 @@ inline FilledBufferReturnProxy buffer(const vk::Device &device, const vk::Physic
 }
 
 template <typename T, size_t N>
-inline FilledBufferReturnProxy buffer(const vk::Device &device, const vk::PhysicalDeviceMemoryProperties &properties, const std::array <T, N> &vec, const vk::BufferUsageFlags &flags, bool external = false)
+inline FilledBufferReturnProxy buffer
+(
+	const vk::Device &device,
+	const vk::PhysicalDeviceMemoryProperties &properties,
+	const std::array <T, N> &vec,
+	const vk::BufferUsageFlags &flags,
+	bool external = false
+)
 {
 	DeallocationQueue dq;
 	Buffer buffer = littlevk::buffer(device, properties, vec.size() * sizeof(T), flags, external).defer(dq);
@@ -1668,7 +1688,15 @@ inline FilledBufferReturnProxy buffer(const vk::Device &device, const vk::Physic
 }
 
 template <typename T>
-inline FilledBufferReturnProxy buffer(const vk::Device &device, const vk::PhysicalDeviceMemoryProperties &properties, const T *const data, size_t size, const vk::BufferUsageFlags &flags, bool external = false)
+inline FilledBufferReturnProxy buffer
+(
+	const vk::Device &device,
+	const vk::PhysicalDeviceMemoryProperties &properties,
+	const T *const data,
+	size_t size,
+	const vk::BufferUsageFlags &flags,
+	bool external = false
+)
 {
 	DeallocationQueue dq;
 	Buffer buffer = littlevk::buffer(device, properties, size, flags, external).defer(dq);
@@ -2356,6 +2384,8 @@ struct linked_descriptor_updator {
 	// Allow for arbitrarily many updates; enable partial/full updates
 	std::vector <vk::DescriptorImageInfo> image_infos;
 	std::vector <vk::DescriptorBufferInfo> buffer_infos;
+	std::vector <size_t> image_indices;
+	std::vector <size_t> buffer_indices;
 	std::vector <vk::WriteDescriptorSet> writes;
 
 	linked_descriptor_updator(const vk::Device &device_, const vk::DescriptorSet &dset_,
@@ -2366,24 +2396,36 @@ struct linked_descriptor_updator {
 			const vk::Sampler &sampler, const vk::ImageView &view,
 			const vk::ImageLayout &layout) {
 		image_infos.emplace_back(sampler, view, layout);
+		image_indices.push_back(writes.size());
 		writes.emplace_back(dset, binding, element,
 				bindings[binding].descriptorCount,
-				bindings[binding].descriptorType,
-				&image_infos.back());
+				bindings[binding].descriptorType);
 		return *this;
 	}
 	
 	linked_descriptor_updator &update(uint32_t binding, uint32_t element,
 			const vk::Buffer &buffer, uint32_t offset, uint32_t range) {
 		buffer_infos.emplace_back(buffer, offset, range);
+		buffer_indices.push_back(writes.size());
 		writes.emplace_back(dset, binding, element,
 				bindings[binding].descriptorCount,
-				bindings[binding].descriptorType,
-				nullptr, &buffer_infos.back());
+				bindings[binding].descriptorType);
 		return *this;
 	}
 
 	void finalize() {
+		// Assign the addresses
+		for (size_t i = 0; i < image_infos.size(); i++) {
+			size_t index = image_indices[i];
+			writes[index].pImageInfo = &image_infos[i];
+		}
+
+		for (size_t i = 0; i < buffer_infos.size(); i++) {
+			size_t index = buffer_indices[i];
+			writes[index].pBufferInfo = &buffer_infos[i];
+		}
+
+		// Execute the update
 		device.updateDescriptorSets(writes, nullptr);
 	}
 
