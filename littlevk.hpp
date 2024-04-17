@@ -1206,12 +1206,29 @@ inline RenderPassBeginInfo <AttachmentCount> default_rp_begin_info
 }
 
 // Configuring viewport and scissor
+// TODO: more options
 struct RenderArea {
-	// float x, y, w, h;
 	vk::Extent2D extent;
 
 	RenderArea() = delete;
 	RenderArea(const Window *window) : extent(window->extent) {}
+};
+
+inline void viewport_and_scissor(const vk::CommandBuffer &cmd, const vk::Extent2D &extent)
+{
+	vk::Viewport viewport {
+		0.0f, 0.0f,
+		(float) extent.width,
+		(float) extent.height,
+		0.0f, 1.0f
+	};
+
+	vk::Rect2D scissor {
+		{}, extent
+	};
+
+	cmd.setViewport(0, viewport);
+	cmd.setScissor(0, scissor);
 };
 
 inline void viewport_and_scissor(const vk::CommandBuffer &cmd, const RenderArea &area)
@@ -2392,6 +2409,14 @@ struct linked_descriptor_updator {
 		const std::array <vk::DescriptorSetLayoutBinding, N> &bindings_)
 			: device(device_), dset(dset_), bindings(bindings_) {}
 
+	~linked_descriptor_updator() {
+		if (!writes.empty()) {
+			microlog::warning("linked_descriptor_updator",
+				"Updates to descriptor set (handle = %p) where invoked, "
+				"but never finalized.\n", (void *) dset);
+		}
+	}
+
 	linked_descriptor_updator &update(uint32_t binding, uint32_t element,
 			const vk::Sampler &sampler, const vk::ImageView &view,
 			const vk::ImageLayout &layout) {
@@ -2427,6 +2452,13 @@ struct linked_descriptor_updator {
 
 		// Execute the update
 		device.updateDescriptorSets(writes, nullptr);
+
+		// Clear to indicate finished business
+		image_infos.clear();
+		buffer_infos.clear();
+		image_indices.clear();
+		buffer_indices.clear();
+		writes.clear();
 	}
 
 	void offload(std::vector <vk::WriteDescriptorSet> &other) {
