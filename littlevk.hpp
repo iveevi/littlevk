@@ -2355,7 +2355,7 @@ struct linked_device_allocator : std::tuple <Args...> {
 		auto new_values = std::tuple_cat((std::tuple <Args...>) *this, std::make_tuple(image));
 		return { device, properties, dal, new_values };
 	}
-	
+
 	template <typename ... BufferArgs>
 	[[nodiscard]] linked_device_allocator <Args..., littlevk::Buffer>
 	buffer(const BufferArgs & ... args) {
@@ -2427,7 +2427,7 @@ struct linked_descriptor_updator {
 				bindings[binding].descriptorType);
 		return *this;
 	}
-	
+
 	linked_descriptor_updator &update(uint32_t binding, uint32_t element,
 			const vk::Buffer &buffer, uint32_t offset, uint32_t range) {
 		buffer_infos.emplace_back(buffer, offset, range);
@@ -2867,7 +2867,7 @@ constexpr std::array <vk::VertexInputAttributeDescription, 1 + sizeof...(Args)> 
 		for (uint32_t i = 0; i < sizeof...(Args); i++)
 			out[i + 1] = previous[i];
 		return out;
-	} else {	
+	} else {
 		return { attribute_for <index, offset, T> () };
 	}
 }
@@ -2924,18 +2924,19 @@ struct PipelineAssembler {
 	uint32_t subpass;
 
 	// Vertex information
-	vk::VertexInputBindingDescription vertex_binding;
+	std::optional <vk::VertexInputBindingDescription> vertex_binding;
 	std::vector <vk::VertexInputAttributeDescription> vertex_attributes;
 
 	// Shader information
 	ShaderStageBundle bundle;
+	bool alpha_blend;
 
 	// Pipeline layout information
 	std::vector <vk::DescriptorSetLayoutBinding> dsl_bindings;
 	std::vector <vk::PushConstantRange> push_constants;
-	
+
 	PipelineAssembler(const vk::Device &device_, littlevk::Window *window_, littlevk::Deallocator *dal_)
-			: device(device_), window(window_), dal(dal_), subpass(0), bundle(device_, dal_) {}
+			: device(device_), window(window_), dal(dal_), subpass(0), bundle(device_, dal_), alpha_blend(true) {}
 
 	PipelineAssembler &with_render_pass(const vk::RenderPass &render_pass_, uint32_t subpass_) {
 		render_pass = render_pass_;
@@ -2951,9 +2952,14 @@ struct PipelineAssembler {
 		        	(layout::attributes.begin(), layout::attributes.end());
 		return *this;
 	}
-	
+
 	PipelineAssembler &with_shader_bundle(const ShaderStageBundle &sb) {
 		bundle = sb;
+		return *this;
+	}
+
+	PipelineAssembler &alpha_blending(bool blend) {
+		alpha_blend = blend;
 		return *this;
 	}
 
@@ -2989,7 +2995,7 @@ struct PipelineAssembler {
 			dsls.push_back(dsl);
 			pipeline.dsl = dsl;
 		}
-	
+
 		pipeline.layout = littlevk::pipeline_layout
 		(
 			device,
@@ -3010,6 +3016,7 @@ struct PipelineAssembler {
 		pipeline_info.fill_mode = vk::PolygonMode::eFill;
 		pipeline_info.cull_mode = vk::CullModeFlagBits::eNone;
 		pipeline_info.dynamic_viewport = true;
+		pipeline_info.alpha_blend = alpha_blend;
 
 		pipeline.handle = littlevk::pipeline::compile(device, pipeline_info).unwrap(dal);
 
