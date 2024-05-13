@@ -2681,6 +2681,7 @@ static void destroy_pipeline(const vk::Device &device, const vk::Pipeline &pipel
 
 using PipelineReturnProxy = DeviceReturnProxy <vk::Pipeline, destroy_pipeline>;
 
+// Regular graphics pipeline
 struct GraphicsCreateInfo {
 	std::optional <vk::VertexInputBindingDescription> vertex_binding = std::nullopt;
 	std::optional <vk::ArrayProxy <vk::VertexInputAttributeDescription>> vertex_attributes = std::nullopt;
@@ -2813,6 +2814,23 @@ inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreat
 	).value;
 }
 
+// Compute pipeline
+struct ComputeCreateInfo {
+	vk::PipelineShaderStageCreateInfo shader_stage;
+	vk::PipelineLayout pipeline_layout;
+};
+
+inline PipelineReturnProxy compile(const vk::Device &device, const ComputeCreateInfo &info)
+{
+	return device.createComputePipeline(nullptr,
+		vk::ComputePipelineCreateInfo {
+			{},
+			info.shader_stage,
+			info.pipeline_layout
+		}
+	).value;
+}
+
 } // namespace pipeline
 
 // Pre defined Vulkan types; not intended for concrete usage
@@ -2913,7 +2931,16 @@ struct Pipeline {
 };
 
 // General purpose pipeline compiler
-struct PipelineAssembler {
+enum PipelineType {
+	eGraphics,
+	eCompute,
+};
+
+template <PipelineType T>
+struct PipelineAssembler {};
+
+template <>
+struct PipelineAssembler <eGraphics> {
 	// Essential
 	vk::Device device;
 	littlevk::Window *window;
@@ -3004,7 +3031,7 @@ struct PipelineAssembler {
 			}
 		).unwrap(dal);
 
-		littlevk::pipeline::GraphicsCreateInfo pipeline_info;
+		pipeline::GraphicsCreateInfo pipeline_info;
 
 		pipeline_info.shader_stages = bundle.stages;
 		pipeline_info.vertex_binding = vertex_binding;
@@ -3017,6 +3044,83 @@ struct PipelineAssembler {
 		pipeline_info.cull_mode = vk::CullModeFlagBits::eNone;
 		pipeline_info.dynamic_viewport = true;
 		pipeline_info.alpha_blend = alpha_blend;
+
+		pipeline.handle = littlevk::pipeline::compile(device, pipeline_info).unwrap(dal);
+
+		return pipeline;
+	}
+
+	operator Pipeline() const {
+		return compile();
+	}
+};
+
+template <>
+struct PipelineAssembler <eCompute> {
+	// Essential
+	vk::Device device;
+	littlevk::Deallocator *dal;
+
+	// Shader information
+	ShaderStageBundle bundle;
+
+	// Pipeline layout information
+	std::vector <vk::DescriptorSetLayoutBinding> dsl_bindings;
+	std::vector <vk::PushConstantRange> push_constants;
+
+	PipelineAssembler(const vk::Device &device_, littlevk::Deallocator *dal_)
+			: device(device_), dal(dal_), bundle(device_, dal_) {}
+
+	PipelineAssembler &with_shader_bundle(const ShaderStageBundle &sb) {
+		bundle = sb;
+		return *this;
+	}
+
+	PipelineAssembler &with_dsl_binding(uint32_t binding, vk::DescriptorType type, uint32_t count, vk::ShaderStageFlagBits stage) {
+		dsl_bindings.emplace_back(binding, type, count, stage);
+		return *this;
+	}
+
+	template <size_t N>
+	PipelineAssembler &with_dsl_bindings(const std::array <vk::DescriptorSetLayoutBinding, N> &bindings) {
+		for (const auto &binding : bindings)
+			dsl_bindings.push_back(binding);
+		return *this;
+	}
+
+	template <typename T>
+	PipelineAssembler &with_push_constant(vk::ShaderStageFlagBits stage) {
+		push_constants.push_back(vk::PushConstantRange { stage, 0, sizeof(T) });
+		return *this;
+	}
+
+	Pipeline compile() const {
+		Pipeline pipeline;
+
+		std::vector <vk::DescriptorSetLayout> dsls;
+		if (dsl_bindings.size()) {
+			vk::DescriptorSetLayout dsl = descriptor_set_layout(
+				device, vk::DescriptorSetLayoutCreateInfo {
+					{}, dsl_bindings
+				}
+			).unwrap(dal);
+
+			dsls.push_back(dsl);
+			pipeline.dsl = dsl;
+		}
+
+		pipeline.layout = littlevk::pipeline_layout
+		(
+			device,
+			vk::PipelineLayoutCreateInfo{
+				{}, dsls, push_constants
+			}
+		).unwrap(dal);
+
+		pipeline::ComputeCreateInfo pipeline_info;
+
+		pipeline_info.shader_stage = bundle.stages.front();
+		pipeline_info.pipeline_layout = pipeline.layout;
 
 		pipeline.handle = littlevk::pipeline::compile(device, pipeline_info).unwrap(dal);
 
