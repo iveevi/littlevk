@@ -2531,7 +2531,7 @@ inline EShLanguage translate_shader_stage(const vk::ShaderStageFlagBits &stage)
 	return EShLangVertex;
 }
 
-static _compile_out glsl_to_spriv
+static _compile_out glsl_to_spirv
 (
 	const std::string &source,
 	const std::set <std::string> &paths,
@@ -2622,7 +2622,7 @@ inline ShaderModuleReturnProxy compile
 	glslang::InitializeProcess();
 
 	// Compile shader
-	_compile_out out = glsl_to_spriv(source, includes, defines, shader_type);
+	_compile_out out = glsl_to_spirv(source, includes, defines, shader_type);
 	if (!out.log.empty()) {
 		// TODO: show the errornous line(s)
 		microlog::error("shader", "Shader compilation failed:\n%s\nSource:\n%s",
@@ -2653,7 +2653,7 @@ inline ShaderModuleReturnProxy compile
 
 	// Compile shader
 	std::string source = standalone::readfile(path);
-	_compile_out out = glsl_to_spriv(source, includes, defines, shader_type);
+	_compile_out out = glsl_to_spirv(source, includes, defines, shader_type);
 	if (!out.log.empty()) {
 		// TODO: show the errornous line(s)
 		microlog::error(__FUNCTION__, "Shader compilation failed:\n%s\nSource:\n%s",
@@ -2916,8 +2916,17 @@ struct ShaderStageBundle {
 	ShaderStageBundle(const vk::Device &device, littlevk::Deallocator *dal)
 			: device(device), dal(dal) {}
 
-	ShaderStageBundle &attach(const std::string &glsl, vk::ShaderStageFlagBits flags) {
+	ShaderStageBundle &source(const std::string &glsl, vk::ShaderStageFlagBits flags) {
 		vk::ShaderModule module = littlevk::shader::compile(device, glsl, flags).unwrap(dal);
+		stages.push_back({{}, flags, module, "main"});
+		return *this;
+	}
+
+	ShaderStageBundle &file(const std::filesystem::path &path, vk::ShaderStageFlagBits flags) {
+		std::filesystem::path parent = path.parent_path();
+		std::string glsl = standalone::readfile(path);
+
+		vk::ShaderModule module = littlevk::shader::compile(device, glsl, flags, { parent.string() }).unwrap(dal);
 		stages.push_back({{}, flags, module, "main"});
 		return *this;
 	}
@@ -3003,8 +3012,8 @@ struct PipelineAssembler <eGraphics> {
 	}
 
 	template <typename T>
-	PipelineAssembler &with_push_constant(vk::ShaderStageFlagBits stage) {
-		push_constants.push_back(vk::PushConstantRange { stage, 0, sizeof(T) });
+	PipelineAssembler &with_push_constant(vk::ShaderStageFlags stage, uint32_t offset = 0) {
+		push_constants.push_back(vk::PushConstantRange { stage, offset, sizeof(T) });
 		return *this;
 	}
 
