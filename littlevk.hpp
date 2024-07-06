@@ -194,10 +194,10 @@ struct Config {
 } // namespace detail
 
 // Singleton config
-inline detail::Config *config()
+inline detail::Config &config()
 {
 	static detail::Config config;
-	return &config;
+	return config;
 }
 
 // Automatic deallocation system
@@ -329,11 +329,11 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_logger
 	// Errors
 	if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
 		microlog::error("validation", "%s\n", pCallbackData->pMessage);
-		if (config()->abort_on_validation_error)
+		if (config().abort_on_validation_error)
 			abort();
 	} else if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
 		microlog::warning("validation", "%s\n", pCallbackData->pMessage);
-	} else {
+	} else if (config().enable_logging) {
 		microlog::info("validation", "%s\n", pCallbackData->pMessage);
 	}
 
@@ -374,7 +374,7 @@ inline const std::vector <const char *> &get_required_extensions()
 		extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
 		// TODO: add config extensions
 
-		if (config()->enable_validation_layers) {
+		if (config().enable_validation_layers) {
 			// Add validation layers
 			extensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
 			extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -439,14 +439,14 @@ inline const vk::Instance &get_vulkan_instance()
 		get_required_extensions().data()
 	};
 
-	if (config()->enable_validation_layers) {
+	if (config().enable_validation_layers) {
 		// Check if validation layers are available
 		if (!validation::check_validation_layer_support(validation_layers)) {
 			microlog::error("instance initialization", "Validation layers are not available!\n");
-			config()->enable_validation_layers = false;
+			config().enable_validation_layers = false;
 		}
 
-		if (config()->enable_validation_layers) {
+		if (config().enable_validation_layers) {
 			instance_info.enabledLayerCount = (uint32_t) validation_layers.size();
 			instance_info.ppEnabledLayerNames = validation_layers.data();
 		}
@@ -479,7 +479,7 @@ inline const vk::Instance &get_vulkan_instance()
 	microlog::info("get_vulkan_instance", "Loaded address %p for vkGetMemoryFdKHR\n", Extensions::vkGetMemoryFdKHR());
 
 	// Loading the debug messenger
-	if (config()->enable_validation_layers) {
+	if (config().enable_validation_layers) {
 		// Create debug messenger
 		static constexpr vk::DebugUtilsMessengerCreateInfoEXT debug_messenger_info {
 			vk::DebugUtilsMessengerCreateFlagsEXT(),
@@ -2384,6 +2384,11 @@ struct linked_device_descriptor_pool {
 	std::vector <vk::DescriptorSet> allocate_descriptor_sets(const vk::DescriptorSetLayout &dsl) const {
 		return device.allocateDescriptorSets(vk::DescriptorSetAllocateInfo { pool, dsl });
 	}
+
+	[[nodiscard]]
+	std::vector <vk::DescriptorSet> allocate_descriptor_sets(const std::vector <vk::DescriptorSetLayout> &dsls) const {
+		return device.allocateDescriptorSets(vk::DescriptorSetAllocateInfo { pool, dsls });
+	}
 };
 
 constexpr linked_device_descriptor_pool bind(const vk::Device &device, const vk::DescriptorPool &pool)
@@ -2713,6 +2718,8 @@ struct GraphicsCreateInfo {
 
 	bool dynamic_viewport = false;
 	bool alpha_blend = false;
+	bool depth_test = true;
+	bool depth_write = true;
 
 	vk::PipelineLayout pipeline_layout;
 	vk::RenderPass render_pass;
@@ -2780,7 +2787,7 @@ inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreat
 	};
 
 	vk::PipelineDepthStencilStateCreateInfo depth_stencil {
-		{}, true, true,
+		{}, info.depth_test, info.depth_write,
 		vk::CompareOp::eLess,
 		false, false,
 		{}, {}, 0.0f, 1.0f
@@ -2996,14 +3003,23 @@ struct PipelineAssembler <eGraphics> {
 
 	// Shader information
 	ShaderStageBundle bundle;
-	bool alpha_blend;
 
 	// Pipeline layout information
 	std::vector <vk::DescriptorSetLayoutBinding> dsl_bindings;
 	std::vector <vk::PushConstantRange> push_constants;
 
+	// Extras
+	vk::PolygonMode fill;
+	vk::CullModeFlags culling;
+
+	bool depth_test;
+	bool depth_write;
+	bool alpha_blend;
+
 	PipelineAssembler(const vk::Device &device_, littlevk::Window *window_, littlevk::Deallocator *dal_)
-			: device(device_), window(window_), dal(dal_), subpass(0), bundle(device_, dal_), alpha_blend(true) {}
+			: device(device_), window(window_), dal(dal_), subpass(0), bundle(device_, dal_),
+			depth_test(true), depth_write(true), alpha_blend(true),
+			fill(vk::PolygonMode::eFill), culling(vk::CullModeFlagBits::eBack) {}
 
 	PipelineAssembler &with_render_pass(const vk::RenderPass &render_pass_, uint32_t subpass_) {
 		render_pass = render_pass_;
@@ -3027,6 +3043,22 @@ struct PipelineAssembler <eGraphics> {
 
 	PipelineAssembler &alpha_blending(bool blend) {
 		alpha_blend = blend;
+		return *this;
+	}
+
+	PipelineAssembler &polygon_mode(const vk::PolygonMode &pmode) {
+		fill = pmode;
+		return *this;
+	}
+
+	PipelineAssembler &cull_mode(const vk::CullModeFlags &cmode) {
+		culling = cmode;
+		return *this;
+	}
+
+	PipelineAssembler &depth_stencil(bool test, bool write) {
+		depth_test = test;
+		depth_write = write;
 		return *this;
 	}
 
@@ -3080,10 +3112,12 @@ struct PipelineAssembler <eGraphics> {
 		pipeline_info.pipeline_layout = pipeline.layout;
 		pipeline_info.render_pass = render_pass;
 		pipeline_info.subpass = subpass;
-		pipeline_info.fill_mode = vk::PolygonMode::eFill;
-		pipeline_info.cull_mode = vk::CullModeFlagBits::eNone;
+		pipeline_info.fill_mode = fill;
+		pipeline_info.cull_mode = culling;
 		pipeline_info.dynamic_viewport = true;
 		pipeline_info.alpha_blend = alpha_blend;
+		pipeline_info.depth_test = depth_test;
+		pipeline_info.depth_write = depth_write;
 
 		pipeline.handle = littlevk::pipeline::compile(device, pipeline_info).unwrap(dal);
 
