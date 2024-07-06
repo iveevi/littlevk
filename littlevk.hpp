@@ -2545,8 +2545,26 @@ static _compile_out glsl_to_spirv
 	// Compile shader
 	EShLanguage stage = translate_shader_stage(shader_type);
 
+	std::string preprocessed = source;
+
+	// Cut the version string
+	// TODO: only assumes its the very first string
+	std::string version;
+	for (size_t i = 0; i < preprocessed.size(); i++) {
+		version += preprocessed[i];
+		if (preprocessed[i] == '\n')
+			break;
+	}
+
+	preprocessed = preprocessed.substr(version.size());
+	for (auto &[symbol, value] : defines)
+		preprocessed = "#define " + symbol + " " + value + "\n" + preprocessed;
+
+	preprocessed = version + preprocessed;
+
+	// TODO: use &
 	const char *shaderStrings[1];
-	shaderStrings[0] = source.data();
+	shaderStrings[0] = preprocessed.data();
 
 	glslang::TShader shader(stage);
 
@@ -2564,7 +2582,7 @@ static _compile_out glsl_to_spirv
 	// ShaderIncluder includer;
 	if (!shader.parse(GetDefaultResources(), 450, false, messages, includer)) {
 		out.log = shader.getInfoLog();
-		out.source = source;
+		out.source = preprocessed;
 		return out;
 	}
 
@@ -2916,18 +2934,31 @@ struct ShaderStageBundle {
 	ShaderStageBundle(const vk::Device &device, littlevk::Deallocator *dal)
 			: device(device), dal(dal) {}
 
-	ShaderStageBundle &source(const std::string &glsl, vk::ShaderStageFlagBits flags) {
-		vk::ShaderModule module = littlevk::shader::compile(device, glsl, flags).unwrap(dal);
-		stages.push_back({{}, flags, module, "main"});
+	// TODO: entry points
+	ShaderStageBundle &source(const std::string &glsl,
+			vk::ShaderStageFlagBits flags,
+			const std::string &entry = "main",
+			const shader::Includes &includes = {},
+			const shader::Defines &defines = {}) {
+		vk::ShaderModule module = littlevk::shader::compile(device,
+				glsl, flags, includes, defines).unwrap(dal);
+		stages.push_back({ {}, flags, module, entry.c_str() });
 		return *this;
 	}
 
-	ShaderStageBundle &file(const std::filesystem::path &path, vk::ShaderStageFlagBits flags) {
+	ShaderStageBundle &file(const std::filesystem::path &path,
+			vk::ShaderStageFlagBits flags,
+			const std::string &entry = "main",
+			const shader::Includes &includes = {},
+			const shader::Defines &defines = {}) {
 		std::filesystem::path parent = path.parent_path();
 		std::string glsl = standalone::readfile(path);
 
-		vk::ShaderModule module = littlevk::shader::compile(device, glsl, flags, { parent.string() }).unwrap(dal);
-		stages.push_back({{}, flags, module, "main"});
+		auto copy_includes = includes;
+		copy_includes.insert(parent.string());
+		vk::ShaderModule module = littlevk::shader::compile(device,
+				glsl, flags, copy_includes, defines).unwrap(dal);
+		stages.push_back({ {}, flags, module, entry.c_str() });
 		return *this;
 	}
 };
