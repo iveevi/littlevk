@@ -1808,21 +1808,35 @@ struct ImageCreateInfo {
         vk::Format format;
         vk::ImageUsageFlags usage;
 	vk::ImageAspectFlags aspect;
+	vk::ImageType type;
+	vk::ImageViewType view;
 	bool external;
 
 	constexpr ImageCreateInfo(uint32_t width_, uint32_t height_,
 		vk::Format format_, vk::ImageUsageFlags usage_,
-		vk::ImageAspectFlags aspect_, bool external_ = false)
+		vk::ImageAspectFlags aspect_,
+		vk::ImageType type_ = vk::ImageType::e2D,
+		vk::ImageViewType view_ = vk::ImageViewType::e2D,
+		bool external_ = false)
 			: width(width_), height(height_),
 			format(format_), usage(usage_),
-			aspect(aspect_), external(external_) {}
+			aspect(aspect_),
+			type(type_),
+			view(view_),
+			external(external_) {}
 
 	constexpr ImageCreateInfo(vk::Extent2D extent,
 		vk::Format format_, vk::ImageUsageFlags usage_,
-		vk::ImageAspectFlags aspect_, bool external_ = false)
+		vk::ImageAspectFlags aspect_,
+		vk::ImageType type_ = vk::ImageType::e2D,
+		vk::ImageViewType view_ = vk::ImageViewType::e2D,
+		bool external_ = false)
 			: width(extent.width), height(extent.height),
 			format(format_), usage(usage_),
-			aspect(aspect_), external(external_) {}
+			aspect(aspect_),
+			type(type_),
+			view(view_),
+			external(external_) {}
 };
 
 inline ImageReturnProxy image(const vk::Device &device, const ImageCreateInfo &info, const vk::PhysicalDeviceMemoryProperties &properties)
@@ -1830,7 +1844,7 @@ inline ImageReturnProxy image(const vk::Device &device, const ImageCreateInfo &i
         Image image;
 
         vk::ImageCreateInfo image_info {
-                {}, vk::ImageType::e2D, info.format,
+                {}, info.type, info.format,
                 vk::Extent3D { info.width, info.height, 1 },
                 1, 1, vk::SampleCountFlagBits::e1,
                 vk::ImageTiling::eOptimal,
@@ -1868,7 +1882,7 @@ inline ImageReturnProxy image(const vk::Device &device, const ImageCreateInfo &i
         device.bindImageMemory(image.image, image.memory, 0);
 
         vk::ImageViewCreateInfo view_info {
-                {}, image.image, vk::ImageViewType::e2D, info.format,
+                {}, image.image, info.view, info.format,
                 vk::ComponentMapping {
                         vk::ComponentSwizzle::eIdentity,
                         vk::ComponentSwizzle::eIdentity,
@@ -2288,15 +2302,26 @@ struct SamplerAssembler {
 
 	vk::Filter mag = vk::Filter::eLinear;
 	vk::Filter min = vk::Filter::eLinear;
+	vk::SamplerMipmapMode mip = vk::SamplerMipmapMode::eLinear;
 
 	SamplerAssembler(const vk::Device &device, Deallocator *const dal)
 			: device(device), dal(dal) {}
 
+	SamplerAssembler &filtering(vk::Filter mode) {
+		mag = mode;
+		min = mode;
+		return *this;
+	}
+
+	SamplerAssembler &mipping(vk::SamplerMipmapMode mode) {
+		mip = mode;
+		return *this;
+	}
+
 	operator vk::Sampler() const {
 		vk::SamplerCreateInfo info {
 			vk::SamplerCreateFlags {},
-			mag, min,
-			vk::SamplerMipmapMode::eLinear,
+			mag, min, mip,
 			vk::SamplerAddressMode::eRepeat,
 			vk::SamplerAddressMode::eRepeat,
 			vk::SamplerAddressMode::eRepeat,
