@@ -455,11 +455,13 @@ inline const vk::Instance &get_vulkan_instance()
 	global_instance.instance = vk::createInstance(instance_info);
 
 	// Post initialization; load extensions
-	Extensions::vkCreateDebugUtilsMessengerEXT() = (PFN_vkCreateDebugUtilsMessengerEXT) vkGetInstanceProcAddr(global_instance.instance, "vkCreateDebugUtilsMessengerEXT");
-	microlog::assertion(Extensions::vkCreateDebugUtilsMessengerEXT(), "vkCreateDebugUtilsMessengerEXT", "Null function address\n");
+	if (config().enable_validation_layers) {
+		Extensions::vkCreateDebugUtilsMessengerEXT() = (PFN_vkCreateDebugUtilsMessengerEXT) vkGetInstanceProcAddr(global_instance.instance, "vkCreateDebugUtilsMessengerEXT");
+		microlog::assertion(Extensions::vkCreateDebugUtilsMessengerEXT(), "vkCreateDebugUtilsMessengerEXT", "Null function address\n");
 
-	Extensions::vkDestroyDebugUtilsMessengerEXT() = (PFN_vkDestroyDebugUtilsMessengerEXT) vkGetInstanceProcAddr(global_instance.instance, "vkDestroyDebugUtilsMessengerEXT");
-	microlog::assertion(Extensions::vkDestroyDebugUtilsMessengerEXT(), "vkDestroyDebugUtilsMessengerEXT", "Null function address\n");
+		Extensions::vkDestroyDebugUtilsMessengerEXT() = (PFN_vkDestroyDebugUtilsMessengerEXT) vkGetInstanceProcAddr(global_instance.instance, "vkDestroyDebugUtilsMessengerEXT");
+		microlog::assertion(Extensions::vkDestroyDebugUtilsMessengerEXT(), "vkDestroyDebugUtilsMessengerEXT", "Null function address\n");
+	}
 
 	Extensions::vkCmdDrawMeshTasksEXT() = (PFN_vkCmdDrawMeshTasksEXT) vkGetInstanceProcAddr(global_instance.instance, "vkCmdDrawMeshTasksEXT");
 	microlog::assertion(Extensions::vkCmdDrawMeshTasksEXT(), "vkCmdDrawMeshTasksEXT", "Null function address\n");
@@ -471,11 +473,12 @@ inline const vk::Instance &get_vulkan_instance()
 	microlog::assertion(Extensions::vkGetMemoryFdKHR(), "vkGetMemoryFdKHR", "Null function address\n");
 
 	// Ensure these are loaded properly
-	microlog::assertion(Extensions::vkCreateDebugUtilsMessengerEXT(), "get_vulkan_instance", "Failed to load extension function: vkCreateDebugUtilsMessengerEXT\n");
+	if (config().enable_validation_layers) {
+		microlog::assertion(Extensions::vkCreateDebugUtilsMessengerEXT(), "get_vulkan_instance", "Failed to load extension function: vkCreateDebugUtilsMessengerEXT\n");
+		microlog::info("get_vulkan_instance", "Loaded address %p for vkCreateDebugUtilsMessengerEXT\n", Extensions::vkCreateDebugUtilsMessengerEXT());
+		microlog::info("get_vulkan_instance", "Loaded address %p for vkDestroyDebugUtilsMessengerEXT\n", Extensions::vkDestroyDebugUtilsMessengerEXT());
+	}
 
-	// Log function addresses
-	microlog::info("get_vulkan_instance", "Loaded address %p for vkCreateDebugUtilsMessengerEXT\n", Extensions::vkCreateDebugUtilsMessengerEXT());
-	microlog::info("get_vulkan_instance", "Loaded address %p for vkDestroyDebugUtilsMessengerEXT\n", Extensions::vkDestroyDebugUtilsMessengerEXT());
 	microlog::info("get_vulkan_instance", "Loaded address %p for vkGetMemoryFdKHR\n", Extensions::vkGetMemoryFdKHR());
 
 	// Loading the debug messenger
@@ -2596,13 +2599,20 @@ static _compile_out glsl_to_spirv
 	const char *shaderStrings[1];
 	shaderStrings[0] = preprocessed.data();
 
+	glslang::SpvOptions options;
+	options.generateDebugInfo = true;
+
 	glslang::TShader shader(stage);
 
 	shader.setEnvTarget(glslang::EShTargetLanguage::EShTargetSpv, glslang::EShTargetLanguageVersion::EShTargetSpv_1_6);
 	shader.setStrings(shaderStrings, 1);
 
 	// Enable SPIR-V and Vulkan rules when parsing GLSL
-	EShMessages messages = (EShMessages) (EShMsgDefault | EShMsgSpvRules | EShMsgVulkanRules);
+	EShMessages messages = (EShMessages)
+		(EShMsgDefault
+			| EShMsgSpvRules
+			| EShMsgVulkanRules
+			| EShMsgDebugInfo);
 
 	// Include directories
 	standalone::DirectoryIncluder includer;
@@ -2627,7 +2637,7 @@ static _compile_out glsl_to_spirv
 		return out;
 	}
 
-	glslang::GlslangToSpv(*program.getIntermediate(stage), out.spirv);
+	glslang::GlslangToSpv(*program.getIntermediate(stage), out.spirv, &options);
 	return out;
 }
 
