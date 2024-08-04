@@ -1,3 +1,5 @@
+#include <stack>
+
 #include "littlevk.hpp"
 
 // GLM for vector math
@@ -89,7 +91,7 @@ struct App : littlevk::Skeleton {
 	vk::PhysicalDeviceMemoryProperties memory_properties;
 	vk::CommandPool command_pool;
 
-	littlevk::Deallocator *deallocator = nullptr;
+	littlevk::Deallocator deallocator;
 
 	std::map <std::string, littlevk::Image> image_cache;
 
@@ -115,7 +117,7 @@ App::App()
         skeletonize(phdev, { 800, 600 }, "Model Viewer", EXTENSIONS);
 
 	// Auto deallocation system
-	deallocator = new littlevk::Deallocator { device };
+	deallocator = littlevk::Deallocator { device };
 
 	// Command pool
 	command_pool = littlevk::command_pool(device,
@@ -180,7 +182,8 @@ void destroy_app(App &app)
 	// First wait for all operations to finish
 	app.device.waitIdle();
 
-	delete app.deallocator;
+	// Release all automatically collected references
+	app.deallocator.drop();
 
 	// Destroy the application skeleton
 	app.destroy();
@@ -257,7 +260,7 @@ int main(int argc, char *argv[])
 
 	// Initialize the rendering backend
 	App app;
-	
+
 	// Create a render pass
 	vk::RenderPass render_pass = littlevk::RenderPassAssembler(app.device, app.deallocator)
 		.add_attachment(littlevk::default_color_attachment(app.swapchain.format))
@@ -269,13 +272,13 @@ int main(int argc, char *argv[])
 
 	// Create a depth buffer
 	littlevk::Image depth_buffer = bind(app.device, app.memory_properties, app.deallocator)
-		.image(app.window->extent,
+		.image(app.window.extent,
 			vk::Format::eD32Sfloat,
 			vk::ImageUsageFlagBits::eDepthStencilAttachment,
 			vk::ImageAspectFlagBits::eDepth);
 
 	// Create framebuffers from the swapchain
-	littlevk::FramebufferGenerator generator(app.device, render_pass, app.window->extent, app.deallocator);
+	littlevk::FramebufferGenerator generator(app.device, render_pass, app.window.extent, app.deallocator);
 	for (const auto &view : app.swapchain.image_views)
 		generator.add(view, depth_buffer.view);
 
@@ -317,30 +320,30 @@ int main(int argc, char *argv[])
 		alignas(16) glm::vec3 light_direction;
 		alignas(16) glm::vec3 albedo_color;
 	};
-	
+
 	constexpr std::array <vk::DescriptorSetLayoutBinding, 1> textured_dslbs {
 		{{ 0, vk::DescriptorType::eCombinedImageSampler,
 			 1, vk::ShaderStageFlagBits::eFragment }}
 	};
-	
+
 	auto vertex_layout = littlevk::VertexLayout <littlevk::rgb32f, littlevk::rgb32f, littlevk::rg32f> ();
 
 	auto textured_bundle = littlevk::ShaderStageBundle(app.device, app.deallocator)
-		.attach(readfile(SHADERS_DIRECTORY "/model_viewer.vert"), vk::ShaderStageFlagBits::eVertex)
-		.attach(readfile(SHADERS_DIRECTORY "/model_viewer_textured.frag"), vk::ShaderStageFlagBits::eFragment);
-	
-	auto default_bundle = littlevk::ShaderStageBundle(app.device, app.deallocator)
-		.attach(readfile(SHADERS_DIRECTORY "/model_viewer.vert"), vk::ShaderStageFlagBits::eVertex)
-		.attach(readfile(SHADERS_DIRECTORY "/model_viewer_default.frag"), vk::ShaderStageFlagBits::eFragment);
+		.source(readfile(SHADERS_DIRECTORY "/model_viewer.vert"), vk::ShaderStageFlagBits::eVertex)
+		.source(readfile(SHADERS_DIRECTORY "/model_viewer_textured.frag"), vk::ShaderStageFlagBits::eFragment);
 
-	littlevk::Pipeline textured_ppl = littlevk::PipelineAssembler(app.device, app.window, app.deallocator)
+	auto default_bundle = littlevk::ShaderStageBundle(app.device, app.deallocator)
+		.source(readfile(SHADERS_DIRECTORY "/model_viewer.vert"), vk::ShaderStageFlagBits::eVertex)
+		.source(readfile(SHADERS_DIRECTORY "/model_viewer_default.frag"), vk::ShaderStageFlagBits::eFragment);
+
+	littlevk::Pipeline textured_ppl = littlevk::PipelineAssembler <littlevk::eGraphics> (app.device, app.window, app.deallocator)
 		.with_render_pass(render_pass, 0)
 		.with_vertex_layout(vertex_layout)
 		.with_shader_bundle(textured_bundle)
 		.with_dsl_bindings(textured_dslbs)
 		.with_push_constant <MVP> (vk::ShaderStageFlagBits::eVertex);
-	
-	littlevk::Pipeline default_ppl = littlevk::PipelineAssembler(app.device, app.window, app.deallocator)
+
+	littlevk::Pipeline default_ppl = littlevk::PipelineAssembler <littlevk::eGraphics> (app.device, app.window, app.deallocator)
 		.with_render_pass(render_pass, 0)
 		.with_vertex_layout(vertex_layout)
 		.with_shader_bundle(default_bundle)
@@ -386,9 +389,9 @@ int main(int argc, char *argv[])
 	float current_time = 0.0f;
 
 	// Mouse actions
-	glfwSetMouseButtonCallback(app.window->handle, mouse_callback);
-	glfwSetCursorPosCallback(app.window->handle, cursor_callback);
-	glfwSetScrollCallback(app.window->handle, scroll_callback);
+	glfwSetMouseButtonCallback(app.window.handle, mouse_callback);
+	glfwSetCursorPosCallback(app.window.handle, cursor_callback);
+	glfwSetScrollCallback(app.window.handle, scroll_callback);
 
 	// Resize callback
 	auto resize = [&]() {
@@ -396,13 +399,13 @@ int main(int argc, char *argv[])
 
 		// Recreate the depth buffer
 		littlevk::Image depth_buffer = bind(app.device, app.memory_properties, app.deallocator)
-			.image(app.window->extent,
+			.image(app.window.extent,
 				vk::Format::eD32Sfloat,
 				vk::ImageUsageFlagBits::eDepthStencilAttachment,
 				vk::ImageAspectFlagBits::eDepth);
 
 		// Rebuid the framebuffers
-		generator.extent = app.window->extent;
+		generator.extent = app.window.extent;
 		for (const auto &view : app.swapchain.image_views)
 			generator.add(view);
 
@@ -415,11 +418,11 @@ int main(int argc, char *argv[])
                 glfwPollEvents();
 
 		// Event handling
-                if (glfwWindowShouldClose(app.window->handle))
+                if (glfwWindowShouldClose(app.window.handle))
                         break;
 
 		// Pause/resume rotation
-		if (glfwGetKey(app.window->handle, GLFW_KEY_SPACE) == GLFW_PRESS) {
+		if (glfwGetKey(app.window.handle, GLFW_KEY_SPACE) == GLFW_PRESS) {
 			if (!pause_resume_pressed) {
 				pause_rotate = !pause_rotate;
 				pause_resume_pressed = true;

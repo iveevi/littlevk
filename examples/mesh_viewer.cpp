@@ -1,3 +1,5 @@
+#include <stack>
+
 #include "littlevk.hpp"
 
 // GLM for vector math
@@ -122,8 +124,8 @@ int main(int argc, char *argv[])
         app.skeletonize(phdev, { 800, 600 }, "Mesh Viewer", EXTENSIONS);
 
 	// Create a deallocator for automatic resource cleanup
-	auto deallocator = new littlevk::Deallocator { app.device };
-	
+	auto deallocator = littlevk::Deallocator { app.device };
+
 	// Create a render pass
 	vk::RenderPass render_pass = littlevk::RenderPassAssembler(app.device, deallocator)
 		.add_attachment(littlevk::default_color_attachment(app.swapchain.format))
@@ -135,13 +137,13 @@ int main(int argc, char *argv[])
 
 	// Create a depth buffer
 	littlevk::Image depth_buffer = bind(app.device, memory_properties, deallocator)
-		.image(app.window->extent,
+		.image(app.window.extent,
 			vk::Format::eD32Sfloat,
 			vk::ImageUsageFlagBits::eDepthStencilAttachment,
 			vk::ImageAspectFlagBits::eDepth);
 
 	// Create framebuffers from the swapchain
-	littlevk::FramebufferGenerator generator(app.device, render_pass, app.window->extent, deallocator);
+	littlevk::FramebufferGenerator generator(app.device, render_pass, app.window.extent, deallocator);
 	for (const auto &view : app.swapchain.image_views)
 		generator.add(view, depth_buffer.view);
 
@@ -190,10 +192,10 @@ int main(int argc, char *argv[])
 	auto vertex_layout = littlevk::VertexLayout <littlevk::rgb32f, littlevk::rgb32f> ();
 
 	auto bundle = littlevk::ShaderStageBundle(app.device, deallocator)
-		.attach(vertex_shader_source, vk::ShaderStageFlagBits::eVertex)
-		.attach(fragment_shader_source, vk::ShaderStageFlagBits::eFragment);
+		.source(vertex_shader_source, vk::ShaderStageFlagBits::eVertex)
+		.source(fragment_shader_source, vk::ShaderStageFlagBits::eFragment);
 
-	littlevk::Pipeline ppl = littlevk::PipelineAssembler(app.device, app.window, deallocator)
+	littlevk::Pipeline ppl = littlevk::PipelineAssembler <littlevk::eGraphics> (app.device, app.window, deallocator)
 		.with_render_pass(render_pass, 0)
 		.with_vertex_layout(vertex_layout)
 		.with_shader_bundle(bundle)
@@ -230,13 +232,13 @@ int main(int argc, char *argv[])
 
 		// Recreate the depth buffer
 		littlevk::Image depth_buffer = bind(app.device, memory_properties, deallocator)
-			.image(app.window->extent,
+			.image(app.window.extent,
 				vk::Format::eD32Sfloat,
 				vk::ImageUsageFlagBits::eDepthStencilAttachment,
 				vk::ImageAspectFlagBits::eDepth);
 
 		// Rebuid the framebuffers
-		generator.extent = app.window->extent;
+		generator.extent = app.window.extent;
 		for (const auto &view : app.swapchain.image_views)
 			generator.add(view);
 
@@ -249,18 +251,18 @@ int main(int argc, char *argv[])
                 glfwPollEvents();
 
 		// Event handling
-                if (glfwWindowShouldClose(app.window->handle))
+                if (glfwWindowShouldClose(app.window.handle))
                         break;
 
 		// Zoom in/out
-		if (glfwGetKey(app.window->handle, GLFW_KEY_EQUAL) == GLFW_PRESS) {
+		if (glfwGetKey(app.window.handle, GLFW_KEY_EQUAL) == GLFW_PRESS) {
 			radius += 0.01f;
 			view = glm::lookAt(
 				radius * glm::vec3 { 0.0f, 0.0f, glm::length(max - min) },
 				glm::vec3 { 0.0f, 0.0f, 0.0f },
 				glm::vec3 { 0.0f, 1.0f, 0.0f }
 			);
-		} else if (glfwGetKey(app.window->handle, GLFW_KEY_MINUS) == GLFW_PRESS) {
+		} else if (glfwGetKey(app.window.handle, GLFW_KEY_MINUS) == GLFW_PRESS) {
 			radius -= 0.01f;
 			view = glm::lookAt(
 				radius * glm::vec3 { 0.0f, 0.0f, glm::length(max - min) },
@@ -270,7 +272,7 @@ int main(int argc, char *argv[])
 		}
 
 		// Pause/resume rotation
-		if (glfwGetKey(app.window->handle, GLFW_KEY_SPACE) == GLFW_PRESS) {
+		if (glfwGetKey(app.window.handle, GLFW_KEY_SPACE) == GLFW_PRESS) {
 			if (!pause_resume_pressed) {
 				pause_rotate = !pause_rotate;
 				pause_resume_pressed = true;
@@ -299,7 +301,7 @@ int main(int argc, char *argv[])
 
 		vk::RenderPassBeginInfo render_pass_info {
 			render_pass, framebuffers[op.index],
-			vk::Rect2D { {}, app.window->extent },
+			vk::Rect2D { {}, app.window.extent },
 			clear_values
 		};
 
@@ -364,7 +366,7 @@ int main(int argc, char *argv[])
 	app.device.waitIdle();
 
 	// Free resources using automatic deallocator
-	delete deallocator;
+	deallocator.drop();
 
         // Delete application
 	app.destroy();

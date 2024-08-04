@@ -108,7 +108,7 @@ int main()
 	app.skeletonize(phdev, { 800, 600 }, "Spinning Cube", EXTENSIONS);
 
 	// Create a deallocator for automatic resource cleanup
-	auto deallocator = new littlevk::Deallocator { app.device };
+	auto deallocator = littlevk::Deallocator { app.device };
 
 	// Create a render pass
 	vk::RenderPass render_pass = littlevk::RenderPassAssembler(app.device, deallocator)
@@ -121,13 +121,13 @@ int main()
 
 	// Create a depth buffer
 	littlevk::Image depth_buffer = bind(app.device, memory_properties, deallocator)
-		.image(app.window->extent,
+		.image(app.window.extent,
 			vk::Format::eD32Sfloat,
 			vk::ImageUsageFlagBits::eDepthStencilAttachment,
 			vk::ImageAspectFlagBits::eDepth);
 
 	// Create framebuffers from the swapchain
-	littlevk::FramebufferGenerator generator(app.device, render_pass, app.window->extent, deallocator);
+	littlevk::FramebufferGenerator generator(app.device, render_pass, app.window.extent, deallocator);
 	for (const auto &view : app.swapchain.image_views)
 		generator.add(view, depth_buffer.view);
 
@@ -162,10 +162,10 @@ int main()
 	auto vertex_layout = littlevk::VertexLayout <littlevk::rgb32f, littlevk::rgb32f> ();
 
 	auto bundle = littlevk::ShaderStageBundle(app.device, deallocator)
-		.attach(vertex_shader_source, vk::ShaderStageFlagBits::eVertex)
-		.attach(fragment_shader_source, vk::ShaderStageFlagBits::eFragment);
+		.source(vertex_shader_source, vk::ShaderStageFlagBits::eVertex)
+		.source(fragment_shader_source, vk::ShaderStageFlagBits::eFragment);
 
-	littlevk::Pipeline ppl = littlevk::PipelineAssembler(app.device, app.window, deallocator)
+	littlevk::Pipeline ppl = littlevk::PipelineAssembler <littlevk::eGraphics> (app.device, app.window, deallocator)
 		.with_render_pass(render_pass, 0)
 		.with_vertex_layout(vertex_layout)
 		.with_shader_bundle(bundle)
@@ -187,13 +187,13 @@ int main()
 
 		// Recreate the depth buffer
 		littlevk::Image depth_buffer = bind(app.device, memory_properties, deallocator)
-			.image(app.window->extent,
+			.image(app.window.extent,
 				vk::Format::eD32Sfloat,
 				vk::ImageUsageFlagBits::eDepthStencilAttachment,
 				vk::ImageAspectFlagBits::eDepth);
 
 		// Rebuid the framebuffers
-		generator.extent = app.window->extent;
+		generator.extent = app.window.extent;
 		for (const auto &view : app.swapchain.image_views)
 			generator.add(view);
 
@@ -204,7 +204,7 @@ int main()
         uint32_t frame = 0;
         while (true) {
                 glfwPollEvents();
-                if (glfwWindowShouldClose(app.window->handle))
+                if (glfwWindowShouldClose(app.window.handle))
                         break;
 
 		littlevk::SurfaceOperation op;
@@ -267,7 +267,7 @@ int main()
 	app.device.waitIdle();
 
 	// Free resources using automatic deallocator
-	delete deallocator;
+	deallocator.drop();
 
         // Delete application
 	app.destroy();
