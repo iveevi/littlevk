@@ -767,63 +767,53 @@ inline vk::PresentModeKHR pick_present_mode(const vk::PhysicalDevice &phdev,
 
 // Swapchain allocation and destruction
 // TODO: info struct...
-inline Swapchain
-swapchain(const vk::PhysicalDevice &phdev, const vk::Device &device,
-	  const vk::SurfaceKHR &surface, const vk::Extent2D &extent,
-	  const QueueFamilyIndices &indices,
-	  const std::optional<vk::PresentModeKHR> &priority_mode = std::nullopt,
-	  const vk::SwapchainKHR *old_swapchain = nullptr)
+inline Swapchain swapchain(const vk::PhysicalDevice &phdev,
+		           const vk::Device &device,
+			   const vk::SurfaceKHR &surface,
+			   const vk::Extent2D &extent,
+			   const QueueFamilyIndices &indices,
+			   const std::optional <vk::PresentModeKHR> &priority_mode = std::nullopt,
+			   const std::optional <vk::SwapchainKHR> old_swapchain = std::nullopt)
 {
 	Swapchain swapchain;
 
 	// Pick a surface format
 	auto surface_format = pick_surface_format(phdev, surface);
 	swapchain.format = surface_format.format;
-	microlog::info("vulkan", "Picked format %s for swapchain\n",
-		       vk::to_string(swapchain.format).c_str());
+
+	microlog::info("vulkan", "Picked format %s for swapchain\n", vk::to_string(swapchain.format).c_str());
 
 	// Surface capabilities and extent
-	vk::SurfaceCapabilitiesKHR capabilities =
-		phdev.getSurfaceCapabilitiesKHR(surface);
+	vk::SurfaceCapabilitiesKHR capabilities = phdev.getSurfaceCapabilitiesKHR(surface);
 
 	// Set the surface extent
 	vk::Extent2D swapchain_extent = extent;
-	if (capabilities.currentExtent.width ==
-	    std::numeric_limits<uint32_t>::max()) {
-		swapchain_extent.width =
-			std::clamp(swapchain_extent.width,
+	if (capabilities.currentExtent.width == std::numeric_limits <uint32_t> ::max()) {
+		swapchain_extent.width = std::clamp(swapchain_extent.width,
 				   capabilities.minImageExtent.width,
 				   capabilities.maxImageExtent.width);
 
-		swapchain_extent.height =
-			std::clamp(swapchain_extent.height,
+		swapchain_extent.height = std::clamp(swapchain_extent.height,
 				   capabilities.minImageExtent.height,
 				   capabilities.maxImageExtent.height);
-	}
-	else {
+	} else {
 		swapchain_extent = capabilities.currentExtent;
 	}
 
 	// Transform, etc
-	vk::SurfaceTransformFlagBitsKHR transform =
-		(capabilities.supportedTransforms &
-		 vk::SurfaceTransformFlagBitsKHR::eIdentity)
+	vk::SurfaceTransformFlagBitsKHR transform = (capabilities.supportedTransforms & vk::SurfaceTransformFlagBitsKHR::eIdentity)
 			? vk::SurfaceTransformFlagBitsKHR::eIdentity
 			: capabilities.currentTransform;
 
 	// Composite alpha
-	vk::CompositeAlphaFlagBitsKHR composite_alpha =
-		(capabilities.supportedCompositeAlpha &
-		 vk::CompositeAlphaFlagBitsKHR::eOpaque)
+	vk::CompositeAlphaFlagBitsKHR composite_alpha = (capabilities.supportedCompositeAlpha & vk::CompositeAlphaFlagBitsKHR::eOpaque)
 			? vk::CompositeAlphaFlagBitsKHR::eOpaque
 			: vk::CompositeAlphaFlagBitsKHR::ePreMultiplied;
 
 	// Present mode
-	vk::PresentModeKHR present_mode =
-		priority_mode ? *priority_mode
-			      : pick_present_mode(phdev, surface);
-	microlog::info("vulkan", "Picked present mode %s for swapchain\n",
-		       vk::to_string(present_mode).c_str());
+	vk::PresentModeKHR present_mode = priority_mode.value_or(pick_present_mode(phdev, surface));
+
+	microlog::info("vulkan", "Picked present mode %s for swapchain\n", vk::to_string(present_mode).c_str());
 
 	// Creation info
 	swapchain.info = vk::SwapchainCreateInfoKHR {
@@ -835,16 +825,17 @@ swapchain(const vk::PhysicalDevice &phdev, const vk::Device &device,
 		swapchain_extent,
 		1,
 		// TODO: pass these as options
-		vk::ImageUsageFlagBits::eColorAttachment |
-			vk::ImageUsageFlagBits::eTransferSrc |
-			vk::ImageUsageFlagBits::eTransferDst,
+		vk::ImageUsageFlagBits::eColorAttachment
+			| vk::ImageUsageFlagBits::eTransferSrc
+			| vk::ImageUsageFlagBits::eTransferDst,
 		vk::SharingMode::eExclusive,
 		{},
 		transform,
 		composite_alpha,
 		present_mode,
 		true,
-		(old_swapchain ? *old_swapchain : nullptr)};
+		old_swapchain.value_or(nullptr)
+	};
 
 	// In case graphics and present queues are different
 	if (indices.graphics != indices.present) {
@@ -861,24 +852,21 @@ swapchain(const vk::PhysicalDevice &phdev, const vk::Device &device,
 
 	// Create image views
 	vk::ImageViewCreateInfo create_view_info {
-		{},
-		{},
-		vk::ImageViewType::e2D,
-		swapchain.format,
-		{},
-		vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1,
-					  0, 1)};
+		{}, {}, vk::ImageViewType::e2D,
+		swapchain.format, {},
+		vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1)
+	};
 
 	for (size_t i = 0; i < swapchain.images.size(); i++) {
 		create_view_info.image = swapchain.images[i];
-		swapchain.image_views.emplace_back(
-			device.createImageView(create_view_info));
+		swapchain.image_views.emplace_back(device.createImageView(create_view_info));
 	}
 
 	return swapchain;
 }
 
-inline void resize(const vk::Device &device, Swapchain &swapchain,
+inline void resize(const vk::Device &device,
+		   Swapchain &swapchain,
 		   const vk::Extent2D &extent)
 {
 	// First free the old swapchain resources
@@ -905,8 +893,7 @@ inline void resize(const vk::Device &device, Swapchain &swapchain,
 	swapchain.image_views.clear();
 	for (size_t i = 0; i < swapchain.images.size(); i++) {
 		create_view_info.image = swapchain.images[i];
-		swapchain.image_views.emplace_back(
-			device.createImageView(create_view_info));
+		swapchain.image_views.emplace_back(device.createImageView(create_view_info));
 	}
 }
 
@@ -1441,22 +1428,21 @@ acquire_image(const vk::Device &device, const vk::SwapchainKHR &swapchain,
 	return {SurfaceOperation::eOk, image_index};
 }
 
-inline SurfaceOperation
-present_image(const vk::Queue &queue, const vk::SwapchainKHR &swapchain,
-	      const std::optional<PresentSyncronization::Frame> &sync_frame,
-	      uint32_t index)
+inline SurfaceOperation present_image(const vk::Queue &queue,
+		                      const vk::SwapchainKHR &swapchain,
+				      const std::optional<PresentSyncronization::Frame> &sync_frame,
+				      uint32_t index)
 {
 	std::vector<vk::Semaphore> wait_semaphores;
 	if (sync_frame)
 		wait_semaphores.push_back(sync_frame->render_finished);
 
-	vk::PresentInfoKHR present_info {wait_semaphores, swapchain, index};
+	vk::PresentInfoKHR present_info { wait_semaphores, swapchain, index };
 
 	try {
 		// TODO: check return value here
 		(void) queue.presentKHR(present_info);
-	}
-	catch (vk::OutOfDateKHRError &e) {
+	} catch (vk::OutOfDateKHRError &e) {
 		microlog::warning("present_image", "Swapchain out of date\n");
 		return {SurfaceOperation::eResize, 0};
 	}
@@ -1474,13 +1460,11 @@ inline bool physical_device_able(const vk::PhysicalDevice &phdev,
 
 	// Check if all the extensions are supported
 	for (const char *extension : extensions) {
-		auto finder =
-			[&extension](const vk::ExtensionProperties &prop) {
-				return !strcmp(prop.extensionName, extension);
-			};
+		auto finder = [&extension](const vk::ExtensionProperties &prop) {
+			return !strcmp(prop.extensionName, extension);
+		};
 
-		if (std::find_if(exts.begin(), exts.end(), finder) ==
-		    exts.end()) {
+		if (std::find_if(exts.begin(), exts.end(), finder) == exts.end()) {
 			microlog::warning("physical_device_able",
 					  "Extension \"%s\" is not supported\n",
 					  extension);
@@ -1510,10 +1494,11 @@ inline vk::PhysicalDevice pick_physical_device(
 }
 
 // Create logical device on an arbitrary queue
-inline vk::Device
-device(const vk::PhysicalDevice &phdev, const uint32_t queue_family,
-       const uint32_t queue_count, const std::vector<const char *> &extensions,
-       const std::optional<vk::PhysicalDeviceFeatures2KHR> &features = {})
+inline vk::Device device(const vk::PhysicalDevice &phdev,
+		         const uint32_t queue_family,
+			 const uint32_t queue_count,
+			 const std::vector <const char *> &extensions,
+			 const std::optional <vk::PhysicalDeviceFeatures2KHR> &features = std::nullopt)
 {
 	// Queue priorities
 	std::vector<float> queue_priorities(queue_count, 1.0f);
@@ -1546,10 +1531,10 @@ device(const vk::PhysicalDevice &phdev, const uint32_t queue_family,
 }
 
 // Create a logical device
-inline vk::Device
-device(const vk::PhysicalDevice &phdev, const QueueFamilyIndices &indices,
-       const std::vector<const char *> &extensions,
-       const std::optional<vk::PhysicalDeviceFeatures2KHR> &features = {})
+inline vk::Device device(const vk::PhysicalDevice &phdev,
+		         const QueueFamilyIndices &indices,
+			 const std::vector <const char *> &extensions,
+			 const std::optional <vk::PhysicalDeviceFeatures2KHR> &features = std::nullopt)
 {
 	auto families = phdev.getQueueFamilyProperties();
 	uint32_t count = families[indices.graphics].queueCount;
@@ -1602,8 +1587,7 @@ inline bool Skeleton::skeletonize(
 	surface = make_surface(window);
 
 	QueueFamilyIndices queue_family = find_queue_families(phdev, surface);
-	device = littlevk::device(phdev, queue_family, device_extensions,
-				  features);
+	device = littlevk::device(phdev, queue_family, device_extensions, features);
 	swapchain = littlevk::swapchain(phdev, device, surface, window.extent,
 					queue_family, priority_present_mode);
 
@@ -2228,43 +2212,59 @@ inline void copy_image_to_buffer(const vk::CommandBuffer &cmd,
 }
 
 inline void copy_image_to_buffer(const vk::CommandBuffer &cmd,
-				 const Image &image, const Buffer &buffer,
+				 const Image &image,
+				 const Buffer &buffer,
 				 const vk::ImageLayout &layout)
 {
 	vk::BufferImageCopy region {
 		0,
 		0,
 		0,
-		vk::ImageSubresourceLayers {vk::ImageAspectFlagBits::eColor, 0,
-					    0, 1},
-		vk::Offset3D {0, 0, 0},
-		vk::Extent3D {image.extent.width, image.extent.height, 1}};
+		vk::ImageSubresourceLayers {
+			vk::ImageAspectFlagBits::eColor,
+			0, 0, 1
+		},
+		vk::Offset3D { 0, 0, 0 },
+		vk::Extent3D { image.extent.width, image.extent.height, 1 }
+	};
 
 	cmd.copyImageToBuffer(*image, layout, *buffer, region);
 }
 
 // Binding resources to descriptor sets
-inline void bind(const vk::Device &device, const vk::DescriptorSet &dset,
-		 const Image &img, const vk::Sampler &sampler)
+inline void bind_descriptor_set(const vk::Device &device,
+		                const vk::DescriptorSet &dset,
+				const Image &img,
+				const vk::Sampler &sampler)
 {
 	vk::DescriptorImageInfo image_info {
-		sampler, img.view, vk::ImageLayout::eShaderReadOnlyOptimal};
+		sampler, img.view,
+		vk::ImageLayout::eShaderReadOnlyOptimal
+	};
 
 	vk::WriteDescriptorSet write {
-		dset,	    0, 0, 1, vk::DescriptorType::eCombinedImageSampler,
-		&image_info};
+		dset, 0, 0, 1,
+		vk::DescriptorType::eCombinedImageSampler,
+		&image_info
+	};
 
 	device.updateDescriptorSets({write}, {});
 }
 
-inline void bind(const vk::Device &device, const vk::DescriptorSet &dset,
-		 const Buffer &buffer, uint32_t binding)
+inline void bind_descriptor_set(const vk::Device &device,
+		                const vk::DescriptorSet &dset,
+				const Buffer &buffer,
+				uint32_t binding)
 {
-	vk::DescriptorBufferInfo buffer_info {*buffer, 0, vk::WholeSize};
+	vk::DescriptorBufferInfo buffer_info {
+		*buffer, 0, vk::WholeSize
+	};
 
 	vk::WriteDescriptorSet write {
-		dset, binding,	   0, 1, vk::DescriptorType::eStorageBuffer,
-		{},   &buffer_info};
+		dset, binding,
+		0, 1, vk::DescriptorType::eStorageBuffer,
+		{}, &buffer_info
+	};
 
 	device.updateDescriptorSets({write}, {});
 }
@@ -2274,38 +2274,38 @@ inline FramebufferReturnProxy framebuffer(const vk::Device &device,
 					  const vk::RenderPass &rp,
 					  const littlevk::Image &image)
 {
-	std::array<vk::ImageView, 1> attachments = {image.view};
+	std::array <vk::ImageView, 1> attachments = {image.view};
 
 	vk::FramebufferCreateInfo framebuffer_info {
-		{},
-		rp,
-		(uint32_t) attachments.size(),
-		attachments.data(),
-		image.extent.width,
-		image.extent.height,
-		1};
+		{}, rp,
+		(uint32_t) attachments.size(), attachments.data(),
+		image.extent.width, image.extent.height, 1
+	};
 
 	return device.createFramebuffer(framebuffer_info);
 }
 
 // Single-time command buffer submission
-inline void
-submit_now(const vk::Device &device, const vk::CommandPool &pool,
-	   const vk::Queue &queue,
-	   const std::function<void(const vk::CommandBuffer &)> &function)
+inline void submit_now(const vk::Device &device,
+		       const vk::CommandPool &pool,
+		       const vk::Queue &queue,
+		       const std::function <void (const vk::CommandBuffer &)> &function)
 {
-	vk::CommandBuffer cmd =
-		device
-			.allocateCommandBuffers(vk::CommandBufferAllocateInfo {
-				pool, vk::CommandBufferLevel::ePrimary, 1})
-			.front();
+	vk::CommandBuffer cmd = device
+		.allocateCommandBuffers(vk::CommandBufferAllocateInfo {
+			pool, vk::CommandBufferLevel::ePrimary, 1
+		}).front();
 
-	cmd.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-	function(cmd);
+	cmd.begin({ vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
+		function(cmd);
 	cmd.end();
 
-	vk::SubmitInfo submit_info {0, nullptr, nullptr, 1, &cmd, 0, nullptr};
+	vk::SubmitInfo submit_info {
+		0, nullptr, nullptr,
+		1, &cmd, 0, nullptr
+	};
 
+	// TODO: check
 	(void) queue.submit(1, &submit_info, nullptr);
 	queue.waitIdle();
 
@@ -2319,18 +2319,34 @@ static void destroy_command_pool(const vk::Device &device,
 	device.destroyCommandPool(pool);
 }
 
-using CommandPoolReturnProxy =
-	DeviceReturnProxy<vk::CommandPool, destroy_command_pool>;
+using CommandPoolReturnProxy = DeviceReturnProxy <vk::CommandPool, destroy_command_pool>;
 
-inline CommandPoolReturnProxy
-command_pool(const vk::Device &device, const vk::CommandPoolCreateInfo &info)
+inline CommandPoolReturnProxy command_pool(const vk::Device &device,
+		                           const vk::CommandPoolCreateInfo &info)
 {
 	vk::CommandPool pool;
-	if (device.createCommandPool(&info, nullptr, &pool) !=
-	    vk::Result::eSuccess)
+	if (device.createCommandPool(&info, nullptr, &pool) != vk::Result::eSuccess)
 		return true;
 
 	return std::move(pool);
+}
+
+template <typename ... Args>
+inline CommandPoolReturnProxy command_pool(const vk::Device &device, const Args &... args)
+{
+	vk::CommandPoolCreateInfo info { args... };
+
+	vk::CommandPool pool;
+	if (device.createCommandPool(&info, nullptr, &pool) != vk::Result::eSuccess)
+		return true;
+
+	return std::move(pool);
+}
+
+template <typename ... Args>
+inline auto command_buffers(const vk::Device &device, const vk::CommandPool &pool, const Args &... args)
+{
+	return device.allocateCommandBuffers({ pool, args... });
 }
 
 static void destroy_descriptor_pool(const vk::Device &device,
@@ -2339,12 +2355,10 @@ static void destroy_descriptor_pool(const vk::Device &device,
 	device.destroyDescriptorPool(pool);
 }
 
-using DescriptorPoolReturnProxy =
-	DeviceReturnProxy<vk::DescriptorPool, destroy_descriptor_pool>;
+using DescriptorPoolReturnProxy = DeviceReturnProxy <vk::DescriptorPool, destroy_descriptor_pool>;
 
-inline DescriptorPoolReturnProxy
-descriptor_pool(const vk::Device &device,
-		const vk::DescriptorPoolCreateInfo &info)
+inline DescriptorPoolReturnProxy descriptor_pool(const vk::Device &device,
+		                                 const vk::DescriptorPoolCreateInfo &info)
 {
 	vk::DescriptorPool pool;
 	if (device.createDescriptorPool(&info, nullptr, &pool) !=
@@ -2360,9 +2374,7 @@ static void destroy_descriptor_set_layout(const vk::Device &device,
 	device.destroyDescriptorSetLayout(layout);
 }
 
-using DescriptorSetLayoutReturnProxy =
-	DeviceReturnProxy<vk::DescriptorSetLayout,
-			  destroy_descriptor_set_layout>;
+using DescriptorSetLayoutReturnProxy = DeviceReturnProxy<vk::DescriptorSetLayout, destroy_descriptor_set_layout>;
 
 inline DescriptorSetLayoutReturnProxy
 descriptor_set_layout(const vk::Device &device,
@@ -2428,21 +2440,18 @@ struct SamplerAssembler {
 	SamplerAssembler(const vk::Device &device, Deallocator &dal)
 		: device(device), dal(dal) {}
 
-	SamplerAssembler &filtering(vk::Filter mode)
-	{
+	SamplerAssembler &filtering(vk::Filter mode) {
 		mag = mode;
 		min = mode;
 		return *this;
 	}
 
-	SamplerAssembler &mipping(vk::SamplerMipmapMode mode)
-	{
+	SamplerAssembler &mipping(vk::SamplerMipmapMode mode) {
 		mip = mode;
 		return *this;
 	}
 
-	operator vk::Sampler() const
-	{
+	operator vk::Sampler() const {
 		vk::SamplerCreateInfo info {
 			vk::SamplerCreateFlags {},
 			mag,
@@ -2467,18 +2476,17 @@ struct SamplerAssembler {
 };
 
 // Bind pattern for all physical-logical device operations
-struct linked_devices {
+struct LinkedDevices {
 	const vk::PhysicalDevice &phdev;
 	const vk::Device &device;
 
-	constexpr linked_devices(const vk::PhysicalDevice &phdev_,
+	constexpr LinkedDevices(const vk::PhysicalDevice &phdev_,
 				 const vk::Device &device_)
 		: phdev(phdev_), device(device_) {}
 
-	linked_devices &resize_surface_handles(const vk::SurfaceKHR &surface,
-					       Window &window,
-					       Swapchain &swapchain)
-	{
+	LinkedDevices &resize(const vk::SurfaceKHR &surface,
+			      Window &window,
+			      Swapchain &swapchain) {
 		int new_width = 0;
 		int new_height = 0;
 
@@ -2486,8 +2494,7 @@ struct linked_devices {
 		int current_height = 0;
 
 		do {
-			glfwGetFramebufferSize(window.handle, &current_width,
-					       &current_height);
+			glfwGetFramebufferSize(window.handle, &current_width, &current_height);
 			while (current_width == 0 || current_height == 0) {
 				glfwWaitEvents();
 				glfwGetFramebufferSize(window.handle,
@@ -2495,20 +2502,13 @@ struct linked_devices {
 						       &current_height);
 			}
 
-			glfwGetFramebufferSize(window.handle, &new_width,
-					       &new_height);
-		} while (new_width != current_width ||
-			 new_height != current_height);
+			glfwGetFramebufferSize(window.handle, &new_width, &new_height);
+		} while (new_width != current_width || new_height != current_height);
 
 		// Resize only after stable sizes
-		vk::SurfaceCapabilitiesKHR caps =
-			phdev.getSurfaceCapabilitiesKHR(surface);
-		new_width =
-			std::clamp(new_width, int(caps.minImageExtent.width),
-				   int(caps.maxImageExtent.width));
-		new_height =
-			std::clamp(new_height, int(caps.minImageExtent.height),
-				   int(caps.maxImageExtent.height));
+		vk::SurfaceCapabilitiesKHR caps = phdev.getSurfaceCapabilitiesKHR(surface);
+		new_width = std::clamp(new_width, int(caps.minImageExtent.width), int(caps.maxImageExtent.width));
+		new_height = std::clamp(new_height, int(caps.minImageExtent.height), int(caps.maxImageExtent.height));
 
 		device.waitIdle();
 
@@ -2519,29 +2519,39 @@ struct linked_devices {
 
 		return *this;
 	}
+
+	// TODO: replace?
+	Swapchain swapchain(const vk::SurfaceKHR &surface, const vk::Extent2D &extent, const QueueFamilyIndices &indices) {
+		return littlevk::swapchain(phdev, device, surface, extent, indices);
+	}
+
+	Swapchain swapchain(const vk::SurfaceKHR &surface, const QueueFamilyIndices &indices) {
+		vk::SurfaceCapabilitiesKHR capabilities = phdev.getSurfaceCapabilitiesKHR(surface);
+		return littlevk::swapchain(phdev, device, surface, capabilities.currentExtent, indices);
+	}
 };
 
-constexpr inline linked_devices bind(const vk::PhysicalDevice &phdev,
-				     const vk::Device &device)
+constexpr inline LinkedDevices bind(const vk::PhysicalDevice &phdev,
+				    const vk::Device &device)
 {
-	return linked_devices(phdev, device);
+	return LinkedDevices(phdev, device);
 }
 
 // Bind pattern to do all allocations at once, then unpack
 template <typename... Args>
-struct linked_device_allocator : std::tuple<Args...> {
+struct LinkedDeviceAllocator : std::tuple<Args...> {
 	const vk::Device &device;
 	const vk::PhysicalDeviceMemoryProperties &properties;
 	littlevk::Deallocator &dal;
 
-	constexpr linked_device_allocator(const vk::Device &device_,
-			                  const vk::PhysicalDeviceMemoryProperties &properties_,
-					  littlevk::Deallocator &dal_, const Args &...args)
+	constexpr LinkedDeviceAllocator(const vk::Device &device_,
+			                const vk::PhysicalDeviceMemoryProperties &properties_,
+					littlevk::Deallocator &dal_, const Args &...args)
 		: std::tuple <Args...> (args...), device(device_), properties(properties_), dal(dal_) {}
 
-	constexpr linked_device_allocator(const vk::Device &device_,
-			                  const vk::PhysicalDeviceMemoryProperties &properties_,
-					  littlevk::Deallocator &dal_, const std::tuple <Args...> &args)
+	constexpr LinkedDeviceAllocator(const vk::Device &device_,
+			                const vk::PhysicalDeviceMemoryProperties &properties_,
+					littlevk::Deallocator &dal_, const std::tuple <Args...> &args)
 		: std::tuple <Args...> (args), device(device_), properties(properties_), dal(dal_) {}
 
 	operator const auto &() const {
@@ -2553,7 +2563,7 @@ struct linked_device_allocator : std::tuple<Args...> {
 
 	template <typename... InfoArgs>
 	requires std::is_constructible_v <ImageCreateInfo, InfoArgs...>
-	[[nodiscard]] linked_device_allocator <Args..., littlevk::Image>
+	[[nodiscard]] LinkedDeviceAllocator <Args..., littlevk::Image>
 	image(const InfoArgs &...args) {
 		ImageCreateInfo info(args...);
 		auto image = littlevk::image(device, info, properties).unwrap(dal);
@@ -2562,7 +2572,7 @@ struct linked_device_allocator : std::tuple<Args...> {
 	}
 
 	template <typename... BufferArgs>
-	[[nodiscard]] linked_device_allocator <Args..., littlevk::Buffer>
+	[[nodiscard]] LinkedDeviceAllocator <Args..., littlevk::Buffer>
 	buffer(const BufferArgs &...args) {
 		auto buffer = littlevk::buffer(device, properties, args...).unwrap(dal);
 		auto new_values = std::tuple_cat((std::tuple <Args...>) *this, std::make_tuple(buffer));
@@ -2571,14 +2581,14 @@ struct linked_device_allocator : std::tuple<Args...> {
 };
 
 // Starts with nothing
-constexpr linked_device_allocator<> bind(const vk::Device &device,
-		                         const vk::PhysicalDeviceMemoryProperties &properties,
-					 littlevk::Deallocator &dal)
+constexpr LinkedDeviceAllocator <> bind(const vk::Device &device,
+		                        const vk::PhysicalDeviceMemoryProperties &properties,
+					littlevk::Deallocator &dal)
 {
 	return {device, properties, dal};
 }
 
-struct linked_device_descriptor_pool {
+struct LinkedDeviceDescriptorPool {
 	const vk::Device &device;
 	const vk::DescriptorPool &pool;
 
@@ -2596,35 +2606,31 @@ struct linked_device_descriptor_pool {
 	}
 };
 
-constexpr linked_device_descriptor_pool bind(const vk::Device &device,
-					     const vk::DescriptorPool &pool)
+constexpr LinkedDeviceDescriptorPool bind(const vk::Device &device, const vk::DescriptorPool &pool)
 {
-	return {device, pool};
+	return { device, pool };
 }
 
 // Descriptor set update structures
 template <size_t N>
-struct linked_descriptor_updator {
+struct LinkedDescriptorUpdater {
 	const vk::Device &device;
 	const vk::DescriptorSet &dset;
-	const std::array<vk::DescriptorSetLayoutBinding, N> &bindings;
+	const std::array <vk::DescriptorSetLayoutBinding, N> &bindings;
 
 	// Allow for arbitrarily many updates; enable partial/full updates
-	std::vector<vk::DescriptorImageInfo> image_infos;
-	std::vector<vk::DescriptorBufferInfo> buffer_infos;
-	std::vector<size_t> image_indices;
-	std::vector<size_t> buffer_indices;
-	std::vector<vk::WriteDescriptorSet> writes;
+	std::vector <vk::DescriptorImageInfo> image_infos;
+	std::vector <vk::DescriptorBufferInfo> buffer_infos;
+	std::vector <size_t> image_indices;
+	std::vector <size_t> buffer_indices;
+	std::vector <vk::WriteDescriptorSet> writes;
 
-	linked_descriptor_updator(
-		const vk::Device &device_, const vk::DescriptorSet &dset_,
-		const std::array<vk::DescriptorSetLayoutBinding, N> &bindings_)
-	    : device(device_), dset(dset_), bindings(bindings_)
-	{
-	}
+	LinkedDescriptorUpdater(const vk::Device &device_,
+			        const vk::DescriptorSet &dset_,
+				const std::array <vk::DescriptorSetLayoutBinding, N> &bindings_)
+		: device(device_), dset(dset_), bindings(bindings_) {}
 
-	~linked_descriptor_updator()
-	{
+	~LinkedDescriptorUpdater() {
 		if (!writes.empty()) {
 			microlog::warning("linked_descriptor_updator",
 					  "Updates to descriptor set (handle = "
@@ -2634,11 +2640,10 @@ struct linked_descriptor_updator {
 		}
 	}
 
-	linked_descriptor_updator &update(uint32_t binding, uint32_t element,
-					  const vk::Sampler &sampler,
-					  const vk::ImageView &view,
-					  const vk::ImageLayout &layout)
-	{
+	LinkedDescriptorUpdater &update(uint32_t binding, uint32_t element,
+					const vk::Sampler &sampler,
+					const vk::ImageView &view,
+					const vk::ImageLayout &layout) {
 		image_infos.emplace_back(sampler, view, layout);
 		image_indices.push_back(writes.size());
 		writes.emplace_back(dset, binding, element,
@@ -2647,10 +2652,11 @@ struct linked_descriptor_updator {
 		return *this;
 	}
 
-	linked_descriptor_updator &update(uint32_t binding, uint32_t element,
-					  const vk::Buffer &buffer,
-					  uint32_t offset, uint32_t range)
-	{
+	LinkedDescriptorUpdater &update(uint32_t binding,
+			                uint32_t element,
+					const vk::Buffer &buffer,
+					uint32_t offset,
+					uint32_t range) {
 		buffer_infos.emplace_back(buffer, offset, range);
 		buffer_indices.push_back(writes.size());
 		writes.emplace_back(dset, binding, element,
@@ -2659,8 +2665,7 @@ struct linked_descriptor_updator {
 		return *this;
 	}
 
-	void finalize()
-	{
+	void finalize() {
 		// Assign the addresses
 		for (size_t i = 0; i < image_infos.size(); i++) {
 			size_t index = image_indices[i];
@@ -2683,18 +2688,17 @@ struct linked_descriptor_updator {
 		writes.clear();
 	}
 
-	void offload(std::vector<vk::WriteDescriptorSet> &other)
-	{
+	void offload(std::vector <vk::WriteDescriptorSet> &other) {
 		other.insert(other.end(), writes.begin(), writes.end());
 	}
 };
 
 template <size_t N>
-constexpr linked_descriptor_updator<N>
-bind(const vk::Device &device, const vk::DescriptorSet &dset,
-     const std::array<vk::DescriptorSetLayoutBinding, N> &bindings)
+constexpr LinkedDescriptorUpdater <N> bind(const vk::Device &device,
+		                           const vk::DescriptorSet &dset,
+					   const std::array <vk::DescriptorSetLayoutBinding, N> &bindings)
 {
-	return {device, dset, bindings};
+	return { device, dset, bindings };
 }
 
 namespace shader {
@@ -3230,7 +3234,7 @@ template <PipelineType T>
 struct PipelineAssembler {};
 
 template <>
-struct PipelineAssembler<eGraphics> {
+struct PipelineAssembler <eGraphics> {
 	// Essential
 	const vk::Device &device;
 	const littlevk::Window &window;
@@ -3273,51 +3277,43 @@ struct PipelineAssembler<eGraphics> {
 		alpha_blend(true) {}
 
 	PipelineAssembler &with_render_pass(const vk::RenderPass &render_pass_,
-					    uint32_t subpass_)
-	{
+					    uint32_t subpass_) {
 		render_pass = render_pass_;
 		subpass = subpass_;
 		return *this;
 	}
 
-	template <typename... Args>
-	PipelineAssembler &with_vertex_layout(const VertexLayout<Args...> &)
-	{
-		using layout = VertexLayout<Args...>;
+	// TODO: non template version
+	template <typename ... Args>
+	PipelineAssembler &with_vertex_layout(const VertexLayout <Args...> &) {
+		using layout = VertexLayout <Args...>;
 		vertex_binding = layout::binding;
-		vertex_attributes =
-			std::vector<vk::VertexInputAttributeDescription>(
-				layout::attributes.begin(),
-				layout::attributes.end());
+		vertex_attributes = std::vector <vk::VertexInputAttributeDescription>
+			(layout::attributes.begin(), layout::attributes.end());
 		return *this;
 	}
 
-	PipelineAssembler &with_shader_bundle(const ShaderStageBundle &sb)
-	{
+	PipelineAssembler &with_shader_bundle(const ShaderStageBundle &sb) {
 		bundle = sb;
 		return *this;
 	}
 
-	PipelineAssembler &alpha_blending(bool blend)
-	{
+	PipelineAssembler &alpha_blending(bool blend) {
 		alpha_blend = blend;
 		return *this;
 	}
 
-	PipelineAssembler &polygon_mode(const vk::PolygonMode &pmode)
-	{
+	PipelineAssembler &polygon_mode(const vk::PolygonMode &pmode) {
 		fill = pmode;
 		return *this;
 	}
 
-	PipelineAssembler &cull_mode(const vk::CullModeFlags &cmode)
-	{
+	PipelineAssembler &cull_mode(const vk::CullModeFlags &cmode) {
 		culling = cmode;
 		return *this;
 	}
 
-	PipelineAssembler &depth_stencil(bool test, bool write)
-	{
+	PipelineAssembler &depth_stencil(bool test, bool write) {
 		depth_test = test;
 		depth_write = write;
 		return *this;
@@ -3326,32 +3322,26 @@ struct PipelineAssembler<eGraphics> {
 	PipelineAssembler &with_dsl_binding(uint32_t binding,
 					    vk::DescriptorType type,
 					    uint32_t count,
-					    vk::ShaderStageFlagBits stage)
-	{
+					    vk::ShaderStageFlagBits stage) {
 		dsl_bindings.emplace_back(binding, type, count, stage);
 		return *this;
 	}
 
 	template <size_t N>
-	PipelineAssembler &with_dsl_bindings(
-		const std::array<vk::DescriptorSetLayoutBinding, N> &bindings)
-	{
+	PipelineAssembler &with_dsl_bindings(const std::array<vk::DescriptorSetLayoutBinding, N> &bindings) {
 		for (const auto &binding : bindings)
 			dsl_bindings.push_back(binding);
 		return *this;
 	}
 
 	template <typename T>
-	PipelineAssembler &with_push_constant(vk::ShaderStageFlags stage,
-					      uint32_t offset = 0)
-	{
+	PipelineAssembler &with_push_constant(vk::ShaderStageFlags stage, uint32_t offset = 0) {
 		push_constants.push_back(
 			vk::PushConstantRange {stage, offset, sizeof(T)});
 		return *this;
 	}
 
-	Pipeline compile() const
-	{
+	Pipeline compile() const {
 		Pipeline pipeline;
 
 		std::vector<vk::DescriptorSetLayout> dsls;
@@ -3395,7 +3385,7 @@ struct PipelineAssembler<eGraphics> {
 };
 
 template <>
-struct PipelineAssembler<eCompute> {
+struct PipelineAssembler <eCompute> {
 	// Essential
 	const vk::Device &device;
 	littlevk::Deallocator &dal;
@@ -3411,8 +3401,7 @@ struct PipelineAssembler<eCompute> {
 			  littlevk::Deallocator &dal_)
 		: device(device_), dal(dal_)  {}
 
-	PipelineAssembler &with_shader_bundle(const ShaderStageBundle &sb)
-	{
+	PipelineAssembler &with_shader_bundle(const ShaderStageBundle &sb) {
 		bundle = sb;
 		return *this;
 	}
@@ -3420,30 +3409,26 @@ struct PipelineAssembler<eCompute> {
 	PipelineAssembler &with_dsl_binding(uint32_t binding,
 					    vk::DescriptorType type,
 					    uint32_t count,
-					    vk::ShaderStageFlagBits stage)
-	{
+					    vk::ShaderStageFlagBits stage) {
 		dsl_bindings.emplace_back(binding, type, count, stage);
 		return *this;
 	}
 
 	template <size_t N>
-	PipelineAssembler &with_dsl_bindings(const std::array<vk::DescriptorSetLayoutBinding, N> &bindings)
-	{
+	PipelineAssembler &with_dsl_bindings(const std::array<vk::DescriptorSetLayoutBinding, N> &bindings) {
 		for (const auto &binding : bindings)
 			dsl_bindings.push_back(binding);
 		return *this;
 	}
 
 	template <typename T>
-	PipelineAssembler &with_push_constant(vk::ShaderStageFlagBits stage)
-	{
+	PipelineAssembler &with_push_constant(vk::ShaderStageFlagBits stage) {
 		push_constants.push_back(
 			vk::PushConstantRange {stage, 0, sizeof(T)});
 		return *this;
 	}
 
-	Pipeline compile() const
-	{
+	Pipeline compile() const {
 		Pipeline pipeline;
 
 		std::vector<vk::DescriptorSetLayout> dsls;
@@ -3474,7 +3459,9 @@ struct PipelineAssembler<eCompute> {
 		return pipeline;
 	}
 
-	operator Pipeline() const { return compile(); }
+	operator Pipeline() const {
+		return compile();
+	}
 };
 
 } // namespace littlevk
