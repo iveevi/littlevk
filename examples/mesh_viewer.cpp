@@ -369,7 +369,7 @@ int main(int argc, char *argv[])
 	deallocator.drop();
 
         // Delete application
-	app.destroy();
+	app.drop();
 
 	// TODO: address santizer to check leaks...
         return 0;

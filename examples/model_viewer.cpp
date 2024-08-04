@@ -186,7 +186,7 @@ void destroy_app(App &app)
 	app.deallocator.drop();
 
 	// Destroy the application skeleton
-	app.destroy();
+	app.drop();
 }
 
 // TODO: app method

@@ -223,10 +223,6 @@ struct Deallocator {
 
 	Deallocator(vk::Device device = nullptr) : device(device) {}
 
-	~Deallocator() {
-		drop();
-	}
-
 	void drop() {
 		while (!device_deallocators.empty()) {
 			device_deallocators.front()(device);
@@ -598,10 +594,6 @@ struct Window {
 	std::string title;
 	vk::Extent2D extent;
 
-	~Window() {
-		drop();
-	}
-
 	void drop() {
 		if (handle)
 			glfwDestroyWindow(handle);
@@ -679,9 +671,9 @@ inline uint32_t find_present_queue_family(const vk::PhysicalDevice &phdev,
 			return i;
 	}
 
-	// If none found, throw an error
-	// KOBRA_LOG_FUNC(Log::ERROR) << "No presentation queue family found\n";
-	throw std::runtime_error("[Vulkan] No presentation queue family found");
+	microlog::assertion(false, __FUNCTION__, "No presentation queue family found\n");
+
+	return -1;
 }
 
 // Get both graphics and present queue families
@@ -709,37 +701,35 @@ inline vk::SurfaceFormatKHR pick_surface_format(const vk::PhysicalDevice &phdev,
 {
 	// Constant formats
 	// TODO: add more flexibility
-	static const std::vector<vk::SurfaceFormatKHR> target_formats = {
-		{vk::Format::eB8G8R8A8Unorm, vk::ColorSpaceKHR::eSrgbNonlinear},
+	static const std::vector <vk::SurfaceFormatKHR> target_formats = {
+		{ vk::Format::eB8G8R8A8Unorm, vk::ColorSpaceKHR::eSrgbNonlinear },
 	};
 
 	// Get the surface formats
-	std::vector<vk::SurfaceFormatKHR> formats =
-		phdev.getSurfaceFormatsKHR(surface);
+	std::vector <vk::SurfaceFormatKHR> formats = phdev.getSurfaceFormatsKHR(surface);
 
 	// If there is only one format, return it
-	if (formats.size() == 1 &&
-	    formats[0].format == vk::Format::eUndefined) {
-		return {vk::Format::eB8G8R8A8Unorm,
-			vk::ColorSpaceKHR::eSrgbNonlinear};
+	if (formats.size() == 1 && formats[0].format == vk::Format::eUndefined) {
+		return {
+			vk::Format::eB8G8R8A8Unorm,
+			vk::ColorSpaceKHR::eSrgbNonlinear
+		};
 	}
 
 	// Find the first one that is supported
 	for (const vk::SurfaceFormatKHR &format : formats) {
 		if (std::find_if(target_formats.begin(), target_formats.end(),
 				 [&format](const vk::SurfaceFormatKHR &target) {
-					 return format.format ==
-							target.format &&
-						format.colorSpace ==
-							target.colorSpace;
+					 return format.format == target.format
+					 	&& format.colorSpace == target.colorSpace;
 				 }) != target_formats.end()) {
 			return format;
 		}
 	}
 
-	// If none found, throw an error
-	// KOBRA_LOG_FUNC(Log::ERROR) << "No supported surface format found\n";
-	throw std::runtime_error("[Vulkan] No supported surface format found");
+	microlog::assertion(false, __FUNCTION__, "No supported surface format found\n");
+
+	return vk::SurfaceFormatKHR();
 }
 
 // Pick a present mode
@@ -1587,15 +1577,14 @@ struct Skeleton {
 	Window window;
 
 	// TODO: no default constructor, this turns into a constructor...
-	bool
-	skeletonize(const vk::PhysicalDevice &, const vk::Extent2D &,
-		    const std::string &, const std::vector<const char *> &,
-		    const std::optional<vk::PhysicalDeviceFeatures2KHR> & =
-			    std::nullopt,
-		    const std::optional<vk::PresentModeKHR> & = std::nullopt);
+	bool skeletonize(const vk::PhysicalDevice &,
+			 const vk::Extent2D &,
+			 const std::string &, const std::vector<const char *> &,
+			 const std::optional<vk::PhysicalDeviceFeatures2KHR> & = std::nullopt,
+			 const std::optional<vk::PresentModeKHR> & = std::nullopt);
 
 	// TODO: virtual destructor
-	virtual bool destroy();
+	virtual bool drop();
 
 	void resize();
 	float aspect_ratio() const;
@@ -1624,7 +1613,7 @@ inline bool Skeleton::skeletonize(
 	return true;
 }
 
-inline bool Skeleton::destroy()
+inline bool Skeleton::drop()
 {
 	device.waitIdle();
 	destroy_swapchain(device, swapchain);
