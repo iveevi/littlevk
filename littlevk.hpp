@@ -1871,10 +1871,17 @@ struct Image {
 	vk::DeviceMemory memory;
 	vk::MemoryRequirements requirements;
 	vk::Extent2D extent;
+	vk::ImageLayout layout;
 
-	vk::Image operator*() const { return image; }
+	vk::Image operator*() const {
+		return image;
+	}
 
-	vk::DeviceSize device_size() const { return requirements.size; }
+	vk::DeviceSize device_size() const {
+		return requirements.size;
+	}
+
+	void transition(const vk::CommandBuffer &, const vk::ImageLayout &);
 };
 
 // Return proxy for images
@@ -1885,7 +1892,7 @@ inline void destroy_image(const vk::Device &device, const Image &image)
 	device.freeMemory(image.memory);
 }
 
-using ImageReturnProxy = DeviceReturnProxy<Image, destroy_image>;
+using ImageReturnProxy = DeviceReturnProxy <Image, destroy_image>;
 
 // Create image
 struct ImageCreateInfo {
@@ -1898,50 +1905,45 @@ struct ImageCreateInfo {
 	vk::ImageViewType view;
 	bool external;
 
-	constexpr ImageCreateInfo(
-		uint32_t width_, uint32_t height_, vk::Format format_,
-		vk::ImageUsageFlags usage_, vk::ImageAspectFlags aspect_,
-		vk::ImageType type_ = vk::ImageType::e2D,
-		vk::ImageViewType view_ = vk::ImageViewType::e2D,
-		bool external_ = false)
+	constexpr ImageCreateInfo(uint32_t width_,
+				  uint32_t height_,
+				  vk::Format format_,
+				  vk::ImageUsageFlags usage_, vk::ImageAspectFlags aspect_,
+				  vk::ImageType type_ = vk::ImageType::e2D,
+				  vk::ImageViewType view_ = vk::ImageViewType::e2D,
+				  bool external_ = false)
 	    : width(width_), height(height_), format(format_), usage(usage_),
-	      aspect(aspect_), type(type_), view(view_), external(external_)
-	{
-	}
+	      aspect(aspect_), type(type_), view(view_), external(external_) {}
 
-	constexpr ImageCreateInfo(
-		vk::Extent2D extent, vk::Format format_,
-		vk::ImageUsageFlags usage_, vk::ImageAspectFlags aspect_,
-		vk::ImageType type_ = vk::ImageType::e2D,
-		vk::ImageViewType view_ = vk::ImageViewType::e2D,
-		bool external_ = false)
+	constexpr ImageCreateInfo(vk::Extent2D extent,
+				  vk::Format format_,
+				  vk::ImageUsageFlags usage_, vk::ImageAspectFlags aspect_,
+				  vk::ImageType type_ = vk::ImageType::e2D,
+				  vk::ImageViewType view_ = vk::ImageViewType::e2D,
+				  bool external_ = false)
 	    : width(extent.width), height(extent.height), format(format_),
 	      usage(usage_), aspect(aspect_), type(type_), view(view_),
-	      external(external_)
-	{
-	}
+	      external(external_) {}
 };
 
-inline ImageReturnProxy
-image(const vk::Device &device, const ImageCreateInfo &info,
-      const vk::PhysicalDeviceMemoryProperties &properties)
+inline ImageReturnProxy image(const vk::Device &device,
+			      const ImageCreateInfo &info,
+			      const vk::PhysicalDeviceMemoryProperties &properties)
 {
 	Image image;
 
 	vk::ImageCreateInfo image_info {
 		{},
-		info.type,
-		info.format,
-		vk::Extent3D {info.width, info.height, 1},
-		1,
-		1,
+		info.type, info.format,
+		vk::Extent3D { info.width, info.height, 1 },
+		1, 1,
 		vk::SampleCountFlagBits::e1,
 		vk::ImageTiling::eOptimal,
 		info.usage,
 		vk::SharingMode::eExclusive,
-		0,
-		nullptr,
-		vk::ImageLayout::eUndefined};
+		0, nullptr,
+		vk::ImageLayout::eUndefined
+	};
 
 	vk::ExternalMemoryImageCreateInfo external_info {};
 	if (info.external) {
@@ -1969,32 +1971,37 @@ image(const vk::Device &device, const ImageCreateInfo &info,
 	device.bindImageMemory(image.image, image.memory, 0);
 
 	vk::ImageViewCreateInfo view_info {
-		{},
-		image.image,
-		info.view,
-		info.format,
-		vk::ComponentMapping {vk::ComponentSwizzle::eIdentity,
-				      vk::ComponentSwizzle::eIdentity,
-				      vk::ComponentSwizzle::eIdentity,
-				      vk::ComponentSwizzle::eIdentity},
-		vk::ImageSubresourceRange {info.aspect, 0, 1, 0, 1}};
+		{}, image.image,
+		info.view, info.format,
+		vk::ComponentMapping {
+			vk::ComponentSwizzle::eIdentity,
+			vk::ComponentSwizzle::eIdentity,
+			vk::ComponentSwizzle::eIdentity,
+			vk::ComponentSwizzle::eIdentity
+		},
+		vk::ImageSubresourceRange {
+			info.aspect, 0, 1, 0, 1
+		}
+	};
 
 	image.view = device.createImageView(view_info);
-	image.extent = vk::Extent2D {info.width, info.height};
+	image.extent = vk::Extent2D { info.width, info.height };
+	image.layout = vk::ImageLayout::eUndefined;
 
 	return image;
 }
 
 // TODO: pure template version that skips switch statements
 template <typename ImageType>
-inline void transition(const vk::CommandBuffer &cmd, const ImageType &image,
+inline void transition(const vk::CommandBuffer &cmd,
+		       const ImageType &image,
 		       const vk::ImageLayout old_layout,
 		       const vk::ImageLayout new_layout)
 {
-	static_assert(std::is_same_v<ImageType, Image> ||
-			      std::is_same_v<ImageType, vk::Image>,
-		      "littlevk::transition: ImageType must be either "
-		      "littlevk::Image or vk::Image");
+	static_assert(std::is_same_v <ImageType, Image>
+			|| std::is_same_v <ImageType, vk::Image>,
+			"littlevk::transition: ImageType must be either "
+			"littlevk::Image or vk::Image");
 
 	// Source stage
 	vk::AccessFlags src_access_mask = {};
@@ -2122,19 +2129,16 @@ inline void transition(const vk::CommandBuffer &cmd, const ImageType &image,
 
 	// Aspect mask
 	vk::ImageAspectFlags aspect_mask;
-	if (new_layout == vk::ImageLayout::eDepthStencilAttachmentOptimal) {
+	if (new_layout == vk::ImageLayout::eDepthStencilAttachmentOptimal)
 		aspect_mask = vk::ImageAspectFlagBits::eDepth;
-		// if (format == vk::Format::eD32SfloatS8Uint || format ==
-		// vk::Format::eD24UnormS8Uint) 	aspect_mask |=
-		// vk::ImageAspectFlagBits::eStencil;
-	}
-	else {
+	else
 		aspect_mask = vk::ImageAspectFlagBits::eColor;
-	}
 
 	// Create the barrier
-	vk::ImageSubresourceRange image_subresource_range {aspect_mask, 0, 1, 0,
-							   1};
+	vk::ImageSubresourceRange image_subresource_range {
+		aspect_mask,
+		0, 1, 0, 1
+	};
 
 	vk::Image target_image;
 	if constexpr (std::is_same_v<ImageType, littlevk::Image>)
@@ -2142,71 +2146,85 @@ inline void transition(const vk::CommandBuffer &cmd, const ImageType &image,
 	else
 		target_image = image;
 
-	vk::ImageMemoryBarrier barrier {src_access_mask,
-					dst_access_mask,
-					old_layout,
-					new_layout,
-					VK_QUEUE_FAMILY_IGNORED,
-					VK_QUEUE_FAMILY_IGNORED,
-					target_image,
-					image_subresource_range};
+	vk::ImageMemoryBarrier barrier {
+		src_access_mask,
+		dst_access_mask,
+		old_layout,
+		new_layout,
+		VK_QUEUE_FAMILY_IGNORED,
+		VK_QUEUE_FAMILY_IGNORED,
+		target_image,
+		image_subresource_range
+	};
 
 	// Add the barrier
-	return cmd.pipelineBarrier(source_stage, destination_stage, {}, {}, {},
-				   barrier);
+	return cmd.pipelineBarrier(source_stage, destination_stage, {}, {}, {}, barrier);
+}
+
+// Same for the methods
+inline void Image::transition(const vk::CommandBuffer &cmd, const vk::ImageLayout &layout_)
+{
+	littlevk::transition(cmd, *this, layout, layout_);
+	layout = layout_;
 }
 
 // Copying buffer to image
 inline void copy_buffer_to_image(const vk::CommandBuffer &cmd,
-				 const vk::Image &image, const Buffer &buffer,
+				 const vk::Image &image,
+				 const Buffer &buffer,
 				 const vk::Extent2D &extent,
 				 const vk::ImageLayout &layout)
 {
 	// TODO: ensure same sizes...,
 	// TODO: pass format as well...
 	vk::BufferImageCopy region {
-		0,
-		0,
-		0,
-		vk::ImageSubresourceLayers {vk::ImageAspectFlagBits::eColor, 0,
-					    0, 1},
-		vk::Offset3D {0, 0, 0},
-		vk::Extent3D {extent.width, extent.height, 1}};
+		0, 0, 0,
+		vk::ImageSubresourceLayers {
+			vk::ImageAspectFlagBits::eColor,
+			0, 0, 1
+		},
+		vk::Offset3D { 0, 0, 0 },
+		vk::Extent3D { extent.width, extent.height, 1 }
+	};
 
 	cmd.copyBufferToImage(*buffer, image, layout, region);
 }
 
 inline void copy_buffer_to_image(const vk::CommandBuffer &cmd,
-				 const Image &image, const Buffer &buffer,
+				 const Image &image,
+				 const Buffer &buffer,
 				 const vk::ImageLayout &layout)
 {
 	// TODO: ensure same sizes...,
 	vk::BufferImageCopy region {
-		0,
-		0,
-		0,
-		vk::ImageSubresourceLayers {vk::ImageAspectFlagBits::eColor, 0,
-					    0, 1},
-		vk::Offset3D {0, 0, 0},
-		vk::Extent3D {image.extent.width, image.extent.height, 1}};
+		0, 0, 0,
+		vk::ImageSubresourceLayers {
+			vk::ImageAspectFlagBits::eColor,
+			0, 0, 1
+		},
+		vk::Offset3D { 0, 0, 0 },
+		vk::Extent3D { image.extent.width, image.extent.height, 1 }
+	};
 
 	cmd.copyBufferToImage(*buffer, *image, layout, region);
 }
 
 // Copying image to buffer
 inline void copy_image_to_buffer(const vk::CommandBuffer &cmd,
-				 const vk::Image &image, const Buffer &buffer,
+				 const vk::Image &image,
+				 const Buffer &buffer,
 				 const vk::Extent2D &extent,
 				 const vk::ImageLayout &layout)
 {
 	vk::BufferImageCopy region {
-		0,
-		0,
-		0,
-		vk::ImageSubresourceLayers {vk::ImageAspectFlagBits::eColor, 0,
-					    0, 1},
-		vk::Offset3D {0, 0, 0},
-		vk::Extent3D {extent.width, extent.height, 1}};
+		0, 0, 0,
+		vk::ImageSubresourceLayers {
+			vk::ImageAspectFlagBits::eColor,
+			0, 0, 1
+		},
+		vk::Offset3D { 0, 0, 0 },
+		vk::Extent3D { extent.width, extent.height, 1 }
+	};
 
 	cmd.copyImageToBuffer(image, layout, *buffer, region);
 }
