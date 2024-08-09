@@ -28,6 +28,29 @@
 #include <glslang/Public/ShaderLang.h>
 #include <glslang/SPIRV/GlslangToSpv.h>
 
+namespace littlevk {
+
+namespace detail {
+
+// Configuration parameters (free to user modification)
+struct Config {
+	std::vector<const char *> instance_extensions {};
+	bool enable_validation_layers = true;
+	bool abort_on_validation_error = true;
+	bool enable_logging = true;
+};
+
+} // namespace detail
+
+// Singleton config
+inline detail::Config &config()
+{
+	static detail::Config config;
+	return config;
+}
+
+} // namespace littlevk
+
 // Logging
 namespace microlog {
 
@@ -42,8 +65,7 @@ struct colors {
 
 inline void error(const char *header, const char *format, ...)
 {
-	printf("%s[littlevk::error]%s (%s) ", colors::error, colors::reset,
-	       header);
+	printf("%s[littlevk::error]%s (%s) ", colors::error, colors::reset, header);
 
 	va_list args;
 	va_start(args, format);
@@ -53,8 +75,7 @@ inline void error(const char *header, const char *format, ...)
 
 inline void warning(const char *header, const char *format, ...)
 {
-	printf("%s[littlevk::warning]%s (%s) ", colors::warning, colors::reset,
-	       header);
+	printf("%s[littlevk::warning]%s (%s) ", colors::warning, colors::reset, header);
 
 	va_list args;
 	va_start(args, format);
@@ -64,8 +85,10 @@ inline void warning(const char *header, const char *format, ...)
 
 inline void info(const char *header, const char *format, ...)
 {
-	printf("%s[littlevk::info]%s (%s) ", colors::info, colors::reset,
-	       header);
+	if (!littlevk::config().enable_logging)
+		return;
+
+	printf("%s[littlevk::info]%s (%s) ", colors::info, colors::reset, header);
 
 	va_list args;
 	va_start(args, format);
@@ -75,15 +98,15 @@ inline void info(const char *header, const char *format, ...)
 
 inline void assertion(bool cond, const char *header, const char *format, ...)
 {
-	if (!cond) {
-		printf("%s[littlevk::assert]%s (%s) ", colors::error,
-		       colors::reset, header);
+	if (cond)
+		return;
 
-		va_list args;
-		va_start(args, format);
-		vprintf(format, args);
-		va_end(args);
-	}
+	printf("%s[littlevk::assert]%s (%s) ", colors::error, colors::reset, header);
+
+	va_list args;
+	va_start(args, format);
+	vprintf(format, args);
+	va_end(args);
 }
 
 } // namespace microlog
@@ -91,32 +114,27 @@ inline void assertion(bool cond, const char *header, const char *format, ...)
 // Loading Vulkan extensions
 struct Extensions {
 	// TODO: template to make easier?
-	static auto &vkCreateDebugUtilsMessengerEXT()
-	{
+	static auto &vkCreateDebugUtilsMessengerEXT() {
 		static PFN_vkCreateDebugUtilsMessengerEXT handle = 0;
 		return handle;
 	}
 
-	static auto &vkDestroyDebugUtilsMessengerEXT()
-	{
+	static auto &vkDestroyDebugUtilsMessengerEXT() {
 		static PFN_vkDestroyDebugUtilsMessengerEXT handle = 0;
 		return handle;
 	}
 
-	static auto &vkCmdDrawMeshTasksEXT()
-	{
+	static auto &vkCmdDrawMeshTasksEXT() {
 		static PFN_vkCmdDrawMeshTasksEXT handle = 0;
 		return handle;
 	}
 
-	static auto &vkCmdDrawMeshTasksNV()
-	{
+	static auto &vkCmdDrawMeshTasksNV() {
 		static PFN_vkCmdDrawMeshTasksNV handle = 0;
 		return handle;
 	}
 
-	static auto &vkGetMemoryFdKHR()
-	{
+	static auto &vkGetMemoryFdKHR() {
 		static PFN_vkGetMemoryFdKHR handle = 0;
 		return handle;
 	}
@@ -129,8 +147,7 @@ inline const std::string readfile(const std::filesystem::path &path)
 {
 	std::ifstream f(path);
 	if (!f.good()) {
-		microlog::error(__FUNCTION__, "Could not open file: %s\n",
-				path.c_str());
+		microlog::error(__FUNCTION__, "Could not open file: %s\n", path.c_str());
 		return "";
 	}
 
@@ -192,25 +209,6 @@ struct DirectoryIncluder : public glslang::TShader::Includer {
 } // namespace standalone
 
 namespace littlevk {
-
-namespace detail {
-
-// Configuration parameters (free to user modification)
-struct Config {
-	std::vector<const char *> instance_extensions {};
-	bool enable_validation_layers = true;
-	bool abort_on_validation_error = true;
-	bool enable_logging = true;
-};
-
-} // namespace detail
-
-// Singleton config
-inline detail::Config &config()
-{
-	static detail::Config config;
-	return config;
-}
 
 // Automatic deallocation system
 using DeallocationQueue = std::queue<std::function<void(vk::Device)>>;
@@ -781,7 +779,7 @@ inline Swapchain swapchain(const vk::PhysicalDevice &phdev,
 	auto surface_format = pick_surface_format(phdev, surface);
 	swapchain.format = surface_format.format;
 
-	microlog::info("vulkan", "Picked format %s for swapchain\n", vk::to_string(swapchain.format).c_str());
+	microlog::info(__FUNCTION__, "Picked format %s for swapchain\n", vk::to_string(swapchain.format).c_str());
 
 	// Surface capabilities and extent
 	vk::SurfaceCapabilitiesKHR capabilities = phdev.getSurfaceCapabilitiesKHR(surface);
@@ -813,7 +811,7 @@ inline Swapchain swapchain(const vk::PhysicalDevice &phdev,
 	// Present mode
 	vk::PresentModeKHR present_mode = priority_mode.value_or(pick_present_mode(phdev, surface));
 
-	microlog::info("vulkan", "Picked present mode %s for swapchain\n", vk::to_string(present_mode).c_str());
+	microlog::info(__FUNCTION__, "Picked present mode %s for swapchain\n", vk::to_string(present_mode).c_str());
 
 	// Creation info
 	swapchain.info = vk::SwapchainCreateInfoKHR {
