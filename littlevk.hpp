@@ -1198,51 +1198,43 @@ struct RenderPassBeginInfo {
 	vk::Extent2D m_extent;
 	std::array<vk::ClearValue, AttachmentCount> m_clear_values;
 
-	operator vk::RenderPassBeginInfo() const
-	{
-		return vk::RenderPassBeginInfo(m_render_pass, m_framebuffer,
+	operator vk::RenderPassBeginInfo() const {
+		return vk::RenderPassBeginInfo(m_render_pass,
+				               m_framebuffer,
 					       {{0, 0}, m_extent},
 					       m_clear_values);
 	}
 
-	RenderPassBeginInfo render_pass(vk::RenderPass render_pass) &&
-	{
+	RenderPassBeginInfo render_pass(vk::RenderPass render_pass) && {
 		m_render_pass = render_pass;
 		return std::move(*this);
 	}
 
-	RenderPassBeginInfo framebuffer(vk::Framebuffer framebuffer) &&
-	{
+	RenderPassBeginInfo framebuffer(vk::Framebuffer framebuffer) && {
 		m_framebuffer = framebuffer;
 		return std::move(*this);
 	}
 
-	RenderPassBeginInfo extent(vk::Extent2D extent) &&
-	{
+	RenderPassBeginInfo extent(vk::Extent2D extent) && {
 		m_extent = extent;
 		return std::move(*this);
 	}
 
 	template <typename... Args>
-		requires std::is_constructible_v<vk::ClearColorValue, Args...>
-	RenderPassBeginInfo clear_color(size_t index, const Args &...args) &&
-	{
+	requires std::is_constructible_v<vk::ClearColorValue, Args...>
+	RenderPassBeginInfo clear_color(size_t index, const Args &...args) && {
 		m_clear_values[index] = vk::ClearColorValue(args...);
 		return std::move(*this);
 	}
 
 	template <typename... Args>
-		requires std::is_constructible_v<vk::ClearDepthStencilValue,
-						 Args...>
-	RenderPassBeginInfo clear_depth(size_t index, const Args &...args) &&
-	{
+	requires std::is_constructible_v <vk::ClearDepthStencilValue, Args...>
+	RenderPassBeginInfo clear_depth(size_t index, const Args &...args) && {
 		m_clear_values[index] = vk::ClearDepthStencilValue(args...);
 		return std::move(*this);
 	}
 
-	RenderPassBeginInfo clear_value(size_t index,
-					vk::ClearValue clear_value) &&
-	{
+	RenderPassBeginInfo clear_value(size_t index, vk::ClearValue clear_value) && {
 		m_clear_values[index] = clear_value;
 		return std::move(*this);
 	}
@@ -2497,7 +2489,7 @@ struct LinkedDevices {
 	const vk::Device &device;
 
 	constexpr LinkedDevices(const vk::PhysicalDevice &phdev_,
-				 const vk::Device &device_)
+				const vk::Device &device_)
 		: phdev(phdev_), device(device_) {}
 
 	LinkedDevices &resize(const vk::SurfaceKHR &surface,
@@ -2551,6 +2543,70 @@ constexpr inline LinkedDevices bind(const vk::PhysicalDevice &phdev,
 				    const vk::Device &device)
 {
 	return LinkedDevices(phdev, device);
+}
+
+// Bind pattern for command submission
+struct LinkedCommandQueue {
+	const vk::Device &device;
+	const vk::CommandPool &pool;
+	const vk::Queue &queue;
+
+	template <typename F>
+	requires std::is_invocable_r_v <void, F, vk::CommandBuffer>
+	LinkedCommandQueue &submit(const F &ftn) {
+		vk::CommandBuffer cmd = device.allocateCommandBuffers(
+			vk::CommandBufferAllocateInfo {
+				pool, vk::CommandBufferLevel::ePrimary, 1
+			}
+		).front();
+
+		cmd.begin({ vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
+			ftn(cmd);
+		cmd.end();
+
+		vk::SubmitInfo submit_info {
+			0, nullptr, nullptr,
+			1, &cmd, 0, nullptr
+		};
+
+		// TODO: check
+		(void) queue.submit(1, &submit_info, nullptr);
+
+		return *this;
+	}
+
+	template <typename F>
+	requires std::is_invocable_r_v <void, F, vk::CommandBuffer>
+	LinkedCommandQueue &submit_and_wait(const F &ftn) {
+		vk::CommandBuffer cmd = device.allocateCommandBuffers(
+			vk::CommandBufferAllocateInfo {
+				pool, vk::CommandBufferLevel::ePrimary, 1
+			}
+		).front();
+
+		cmd.begin({ vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
+			ftn(cmd);
+		cmd.end();
+
+		vk::SubmitInfo submit_info {
+			0, nullptr, nullptr,
+			1, &cmd, 0, nullptr
+		};
+
+		// TODO: check
+		(void) queue.submit(1, &submit_info, nullptr);
+
+		device.waitIdle();
+
+		return *this;
+	}
+};
+
+constexpr inline LinkedCommandQueue bind(const vk::Device &device,
+		                         const vk::CommandPool &pool,
+					 const vk::Queue &queue)
+{
+	return LinkedCommandQueue(device, pool, queue);
 }
 
 // Bind pattern to do all allocations at once, then unpack
@@ -2859,8 +2915,10 @@ inline std::string fmt_lines(const std::string &str)
 
 	int line_num = 1;
 	while (std::getline(stream, line)) {
-		out += std::to_string(line_num) + ": " + line + "\n";
-		line_num++;
+		char buffer[1024];
+		memset(buffer, 0, sizeof(buffer));
+		snprintf(buffer, sizeof(buffer), "%4d: %s\n", line_num++, line.c_str());
+		out += buffer;
 	}
 
 	return out;
