@@ -2822,15 +2822,15 @@ inline EShLanguage translate_shader_stage(const vk::ShaderStageFlagBits &stage)
 		break;
 	}
 
-	microlog::error("translate_shader_stage", "Unknown shader stage %s\n",
-			vk::to_string(stage).c_str());
+	microlog::error("translate_shader_stage", "Unknown shader stage %s\n", vk::to_string(stage).c_str());
 
 	return EShLangVertex;
 }
 
 static _compile_out
-glsl_to_spirv(const std::string &source, const std::set<std::string> &paths,
-	      const std::map<std::string, std::string> &defines,
+glsl_to_spirv(const std::string &source,
+	      const std::set<std::string> &paths,
+	      const std::map <std::string, std::string> &defines,
 	      const vk::ShaderStageFlagBits &shader_type)
 {
 	// Output
@@ -2852,8 +2852,7 @@ glsl_to_spirv(const std::string &source, const std::set<std::string> &paths,
 
 	preprocessed = preprocessed.substr(version.size());
 	for (auto &[symbol, value] : defines)
-		preprocessed =
-			"#define " + symbol + " " + value + "\n" + preprocessed;
+		preprocessed = "#define " + symbol + " " + value + "\n" + preprocessed;
 
 	preprocessed = version + preprocessed;
 
@@ -2866,15 +2865,13 @@ glsl_to_spirv(const std::string &source, const std::set<std::string> &paths,
 
 	glslang::TShader shader(stage);
 
-	shader.setEnvTarget(
-		glslang::EShTargetLanguage::EShTargetSpv,
-		glslang::EShTargetLanguageVersion::EShTargetSpv_1_6);
+	shader.setEnvTarget(glslang::EShTargetLanguage::EShTargetSpv,
+			    glslang::EShTargetLanguageVersion::EShTargetSpv_1_6);
 	shader.setStrings(shaderStrings, 1);
 
 	// Enable SPIR-V and Vulkan rules when parsing GLSL
-	EShMessages messages =
-		(EShMessages) (EShMsgDefault | EShMsgSpvRules |
-			       EShMsgVulkanRules | EShMsgDebugInfo);
+	EShMessages messages = (EShMessages) (EShMsgDefault | EShMsgSpvRules
+			| EShMsgVulkanRules | EShMsgDebugInfo);
 
 	// Include directories
 	standalone::DirectoryIncluder includer;
@@ -2882,8 +2879,7 @@ glsl_to_spirv(const std::string &source, const std::set<std::string> &paths,
 		includer.include(path);
 
 	// ShaderIncluder includer;
-	if (!shader.parse(GetDefaultResources(), 450, false, messages,
-			  includer)) {
+	if (!shader.parse(GetDefaultResources(), 450, false, messages, includer)) {
 		out.log = shader.getInfoLog();
 		out.source = preprocessed;
 		return out;
@@ -2891,8 +2887,6 @@ glsl_to_spirv(const std::string &source, const std::set<std::string> &paths,
 
 	// Link the program
 	glslang::TProgram program;
-
-	// program.s
 	program.addShader(&shader);
 
 	if (!program.link(messages)) {
@@ -2900,8 +2894,8 @@ glsl_to_spirv(const std::string &source, const std::set<std::string> &paths,
 		return out;
 	}
 
-	glslang::GlslangToSpv(*program.getIntermediate(stage), out.spirv,
-			      &options);
+	glslang::GlslangToSpv(*program.getIntermediate(stage), out.spirv, &options);
+
 	return out;
 }
 
@@ -2931,21 +2925,21 @@ static void destroy_shader_module(const vk::Device &device,
 	device.destroyShaderModule(shader);
 }
 
-using ShaderModuleReturnProxy =
-	DeviceReturnProxy<vk::ShaderModule, destroy_shader_module>;
+using ShaderModuleReturnProxy = DeviceReturnProxy <vk::ShaderModule, destroy_shader_module>;
 
 // Compile shader
 inline ShaderModuleReturnProxy
-compile(const vk::Device &device, const std::string &source,
+compile(const vk::Device &device,
+	const std::string &source,
 	const vk::ShaderStageFlagBits &shader_type,
-	const Includes &includes = {}, const Defines &defines = {})
+	const Includes &includes = {},
+	const Defines &defines = {})
 {
 	// Check that file exists
 	glslang::InitializeProcess();
 
 	// Compile shader
-	_compile_out out =
-		glsl_to_spirv(source, includes, defines, shader_type);
+	_compile_out out = glsl_to_spirv(source, includes, defines, shader_type);
 	if (!out.log.empty()) {
 		// TODO: show the errornous line(s)
 		microlog::error("shader",
@@ -2954,25 +2948,26 @@ compile(const vk::Device &device, const std::string &source,
 		return true;
 	}
 
-	vk::ShaderModuleCreateInfo create_info(
-		vk::ShaderModuleCreateFlags(),
-		out.spirv.size() * sizeof(uint32_t), out.spirv.data());
+	vk::ShaderModuleCreateInfo create_info;
+	create_info.pCode = out.spirv.data();
+	create_info.codeSize = out.spirv.size() * sizeof(uint32_t);
 
 	return device.createShaderModule(create_info);
 }
 
 inline ShaderModuleReturnProxy
-compile(const vk::Device &device, const std::filesystem::path &path,
+compile(const vk::Device &device,
+	const std::filesystem::path &path,
 	const vk::ShaderStageFlagBits &shader_type,
-	const Includes &includes = {}, const Defines &defines = {})
+	const Includes &includes = {},
+	const Defines &defines = {})
 {
 	// Check that file exists
 	glslang::InitializeProcess();
 
 	// Compile shader
 	std::string source = standalone::readfile(path);
-	_compile_out out =
-		glsl_to_spirv(source, includes, defines, shader_type);
+	_compile_out out = glsl_to_spirv(source, includes, defines, shader_type);
 	if (!out.log.empty()) {
 		// TODO: show the errornous line(s)
 		microlog::error(__FUNCTION__,
@@ -2981,9 +2976,9 @@ compile(const vk::Device &device, const std::filesystem::path &path,
 		return true;
 	}
 
-	vk::ShaderModuleCreateInfo create_info(
-		vk::ShaderModuleCreateFlags(),
-		out.spirv.size() * sizeof(uint32_t), out.spirv.data());
+	vk::ShaderModuleCreateInfo create_info;
+	create_info.pCode = out.spirv.data();
+	create_info.codeSize = out.spirv.size() * sizeof(uint32_t);
 
 	return device.createShaderModule(create_info);
 }
@@ -3031,76 +3026,79 @@ inline PipelineReturnProxy compile(const vk::Device &device,
 		microlog::error("pipeline::compile", "Empty shader stages\n");
 
 	vk::PipelineVertexInputStateCreateInfo vertex_input_info {
-		{}, nullptr, nullptr};
+		{}, nullptr, nullptr
+	};
+
 	if (info.vertex_binding && info.vertex_attributes)
-		vertex_input_info = {
-			{}, *info.vertex_binding, *info.vertex_attributes};
+		vertex_input_info = { {}, *info.vertex_binding, *info.vertex_attributes };
 
 	vk::PipelineInputAssemblyStateCreateInfo input_assembly {
-		{}, vk::PrimitiveTopology::eTriangleList};
+		{}, vk::PrimitiveTopology::eTriangleList
+	};
 
 	// Configuring the viewport
 	vk::PipelineViewportStateCreateInfo viewport_state {
-		{}, 1, nullptr, 1, nullptr};
+		{}, 1, nullptr, 1, nullptr
+	};
 
-	vk::PipelineDynamicStateCreateInfo dynamic_state {{}, 0, nullptr};
+	vk::PipelineDynamicStateCreateInfo dynamic_state {
+		{}, 0, nullptr
+	};
 
 	// Fixed viewport
-	vk::Viewport viewport {0.0f,
-			       0.0f,
-			       (float) info.extent.width,
-			       (float) info.extent.height,
-			       0.0f,
-			       1.0f};
+	vk::Viewport viewport {
+		0.0f, 0.0f,
+		(float) info.extent.width,
+		(float) info.extent.height,
+		0.0f, 1.0f
+	};
 
-	vk::Rect2D scissor {{}, info.extent};
+	vk::Rect2D scissor { {}, info.extent };
 
 	// Dynamic viewport
-	std::array<vk::DynamicState, 2> dynamic_states {
-		vk::DynamicState::eViewport, vk::DynamicState::eScissor};
+	std::array <vk::DynamicState, 2> dynamic_states {
+		vk::DynamicState::eViewport,
+		vk::DynamicState::eScissor
+	};
 
 	// Select according to the configuration
 	if (info.dynamic_viewport) {
 		dynamic_state = vk::PipelineDynamicStateCreateInfo {
 			{},
 			(uint32_t) dynamic_states.size(),
-			dynamic_states.data()};
-	}
-	else {
+			dynamic_states.data()
+		};
+	} else {
 		viewport_state = vk::PipelineViewportStateCreateInfo {
-			{}, 1, &viewport, 1, &scissor};
+			{}, 1, &viewport, 1, &scissor
+		};
 	}
 
 	vk::PipelineRasterizationStateCreateInfo rasterizer {
 		{},
-		false,
-		false,
+		false, false,
 		info.fill_mode,
 		info.cull_mode,
 		vk::FrontFace::eClockwise,
 		false,
-		0.0f,
-		0.0f,
-		0.0f,
-		1.0f};
+		0.0f, 0.0f, 0.0f, 1.0f
+	};
 
 	vk::PipelineMultisampleStateCreateInfo multisampling {
-		{}, vk::SampleCountFlagBits::e1};
+		{}, vk::SampleCountFlagBits::e1
+	};
 
 	vk::PipelineDepthStencilStateCreateInfo depth_stencil {
 		{},
 		info.depth_test,
 		info.depth_write,
 		vk::CompareOp::eLess,
-		false,
-		false,
-		{},
-		{},
-		0.0f,
-		1.0f};
+		false, false,
+		{}, {},
+		0.0f, 1.0f
+	};
 
-	vk::PipelineColorBlendAttachmentState color_blend_attachment = {};
-
+	vk::PipelineColorBlendAttachmentState color_blend_attachment;
 	if (info.alpha_blend) {
 		color_blend_attachment = {
 			true,
@@ -3110,12 +3108,12 @@ inline PipelineReturnProxy compile(const vk::Device &device,
 			vk::BlendFactor::eOne,
 			vk::BlendFactor::eZero,
 			vk::BlendOp::eAdd,
-			vk::ColorComponentFlagBits::eR |
-				vk::ColorComponentFlagBits::eG |
-				vk::ColorComponentFlagBits::eB |
-				vk::ColorComponentFlagBits::eA};
-	}
-	else {
+			vk::ColorComponentFlagBits::eR
+			| vk::ColorComponentFlagBits::eG
+			| vk::ColorComponentFlagBits::eB
+			| vk::ColorComponentFlagBits::eA
+		};
+	} else {
 		color_blend_attachment = {
 			false,
 			vk::BlendFactor::eOne,
@@ -3124,38 +3122,37 @@ inline PipelineReturnProxy compile(const vk::Device &device,
 			vk::BlendFactor::eOne,
 			vk::BlendFactor::eZero,
 			vk::BlendOp::eAdd,
-			vk::ColorComponentFlagBits::eR |
-				vk::ColorComponentFlagBits::eG |
-				vk::ColorComponentFlagBits::eB |
-				vk::ColorComponentFlagBits::eA};
+			vk::ColorComponentFlagBits::eR
+			| vk::ColorComponentFlagBits::eG
+			| vk::ColorComponentFlagBits::eB
+			| vk::ColorComponentFlagBits::eA
+		};
 	}
 
 	vk::PipelineColorBlendStateCreateInfo color_blending {
 		{},
 		false,
-		vk::LogicOp::eCopy,
-		1,
+		vk::LogicOp::eCopy, 1,
 		&color_blend_attachment,
-		{0.0f, 0.0f, 0.0f, 0.0f}};
+		{ 0.0f, 0.0f, 0.0f, 0.0f }
+	};
 
-	return device
-		.createGraphicsPipeline(
+	return device.createGraphicsPipeline(nullptr,
+		vk::GraphicsPipelineCreateInfo {
+			{}, info.shader_stages,
+			&vertex_input_info,
+			&input_assembly,
 			nullptr,
-			vk::GraphicsPipelineCreateInfo {{},
-							info.shader_stages,
-							&vertex_input_info,
-							&input_assembly,
-							nullptr,
-							&viewport_state,
-							&rasterizer,
-							&multisampling,
-							&depth_stencil,
-							&color_blending,
-							&dynamic_state,
-							info.pipeline_layout,
-							info.render_pass,
-							info.subpass})
-		.value;
+			&viewport_state,
+			&rasterizer,
+			&multisampling,
+			&depth_stencil,
+			&color_blending,
+			&dynamic_state,
+			info.pipeline_layout,
+			info.render_pass,
+			info.subpass
+		}).value;
 }
 
 // Compute pipeline
@@ -3167,12 +3164,10 @@ struct ComputeCreateInfo {
 inline PipelineReturnProxy compile(const vk::Device &device,
 				   const ComputeCreateInfo &info)
 {
-	return device
-		.createComputePipeline(
-			nullptr,
-			vk::ComputePipelineCreateInfo {
-				{}, info.shader_stage, info.pipeline_layout})
-		.value;
+	return device.createComputePipeline(nullptr,
+		vk::ComputePipelineCreateInfo {
+			{}, info.shader_stage, info.pipeline_layout
+		}).value;
 }
 
 } // namespace pipeline
@@ -3198,12 +3193,10 @@ struct rgba32f {
 template <typename T, typename... Args>
 constexpr size_t sizeof_all()
 {
-	if constexpr (sizeof...(Args)) {
+	if constexpr (sizeof...(Args))
 		return sizeof(T) + sizeof_all<Args...>();
-	}
-	else {
+	else
 		return sizeof(T);
-	}
 }
 
 template <typename T, bool instantiated = true>
@@ -3257,7 +3250,7 @@ struct ShaderStageBundle {
 	vk::Device device;
 	littlevk::Deallocator &dal;
 
-	std::vector<vk::PipelineShaderStageCreateInfo> stages;
+	std::vector <vk::PipelineShaderStageCreateInfo> stages;
 
 	ShaderStageBundle(const vk::Device &device, littlevk::Deallocator &dal)
 		: device(device), dal(dal) {}
@@ -3267,8 +3260,7 @@ struct ShaderStageBundle {
 				  vk::ShaderStageFlagBits flags,
 				  const std::string &entry = "main",
 				  const shader::Includes &includes = {},
-				  const shader::Defines &defines = {})
-	{
+				  const shader::Defines &defines = {}) {
 		vk::ShaderModule module = littlevk::shader::compile(device, glsl, flags, includes, defines).unwrap(dal);
 		stages.push_back({ {}, flags, module, entry.c_str() });
 		return *this;
@@ -3278,8 +3270,7 @@ struct ShaderStageBundle {
 				vk::ShaderStageFlagBits flags,
 				const std::string &entry = "main",
 				const shader::Includes &includes = {},
-				const shader::Defines &defines = {})
-	{
+				const shader::Defines &defines = {}) {
 		std::filesystem::path parent = path.parent_path();
 		std::string glsl = standalone::readfile(path);
 
