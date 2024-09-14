@@ -1284,11 +1284,11 @@ default_rp_begin_info(const vk::RenderPass &render_pass,
 }
 
 // Configuring viewport and scissor
-// TODO: more options
 struct RenderArea {
 	vk::Extent2D extent;
 
 	RenderArea() = delete;
+	RenderArea(const vk::Extent2D &extent_) : extent(extent_) {}
 	RenderArea(const Window &window) : extent(window.extent) {}
 };
 
@@ -1385,45 +1385,54 @@ present_syncronization(const vk::Device &device, uint32_t frames_in_flight)
 }
 
 struct SurfaceOperation {
-	enum { eOk, eResize, eFailed } status;
+	enum {
+		eOk,
+		eResize,
+		eFailed
+	} status;
 
 	uint32_t index;
 };
 
-inline SurfaceOperation
-acquire_image(const vk::Device &device, const vk::SwapchainKHR &swapchain,
-	      const PresentSyncronization::Frame &sync_frame)
+inline SurfaceOperation acquire_image(const vk::Device &device,
+				      const vk::SwapchainKHR &swapchain,
+				      const PresentSyncronization::Frame &sync_frame)
 {
 	// Wait for previous frame to finish
 	(void) device.waitForFences(sync_frame.in_flight, VK_TRUE, UINT64_MAX);
 
 	// Acquire image
-	auto [result, image_index] = device.acquireNextImageKHR(
-		swapchain, UINT64_MAX, sync_frame.image_available, nullptr);
+	vk::Result result;
+	uint32_t image_index;
+
+	try {
+		std::tie(result, image_index) = device.acquireNextImageKHR(swapchain,
+			UINT64_MAX, sync_frame.image_available, nullptr);
+	} catch (vk::OutOfDateKHRError &) {
+		microlog::warning("acquire_image", "Swapchain out of date\n");
+		return { SurfaceOperation::eResize, 0 };
+	}
 
 	if (result == vk::Result::eErrorOutOfDateKHR) {
 		microlog::warning("acquire_image", "Swapchain out of date\n");
-		return {SurfaceOperation::eResize, 0};
-	}
-	else if (result != vk::Result::eSuccess &&
-		 result != vk::Result::eSuboptimalKHR) {
-		microlog::error("acquire_image",
-				"Failed to acquire swapchain image\n");
-		return {SurfaceOperation::eFailed, 0};
+		return { SurfaceOperation::eResize, 0 };
+	} else if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR) {
+		microlog::error("acquire_image", "Failed to acquire swapchain image\n");
+		return { SurfaceOperation::eFailed, 0 };
 	}
 
 	// Reset fence to prepare for next frame
 	device.resetFences(sync_frame.in_flight);
 
-	return {SurfaceOperation::eOk, image_index};
+	return { SurfaceOperation::eOk, image_index };
 }
 
 inline SurfaceOperation present_image(const vk::Queue &queue,
 		                      const vk::SwapchainKHR &swapchain,
-				      const std::optional<PresentSyncronization::Frame> &sync_frame,
+				      const std::optional <PresentSyncronization::Frame> &sync_frame,
 				      uint32_t index)
 {
-	std::vector<vk::Semaphore> wait_semaphores;
+	std::vector <vk::Semaphore> wait_semaphores;
 	if (sync_frame)
 		wait_semaphores.push_back(sync_frame->render_finished);
 
@@ -1432,12 +1441,12 @@ inline SurfaceOperation present_image(const vk::Queue &queue,
 	try {
 		// TODO: check return value here
 		(void) queue.presentKHR(present_info);
-	} catch (vk::OutOfDateKHRError &e) {
+	} catch (vk::OutOfDateKHRError &) {
 		microlog::warning("present_image", "Swapchain out of date\n");
-		return {SurfaceOperation::eResize, 0};
+		return { SurfaceOperation::eResize, 0 };
 	}
 
-	return {SurfaceOperation::eOk, 0};
+	return { SurfaceOperation::eOk, 0 };
 }
 
 // Check if a physical device supports a set of extensions
