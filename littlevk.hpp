@@ -1756,96 +1756,95 @@ template <typename T>
 inline FilledBufferReturnProxy
 buffer(const vk::Device &device,
        const vk::PhysicalDeviceMemoryProperties &properties,
-       const std::vector<T> &vec, const vk::BufferUsageFlags &flags,
+       const std::vector <T> &vec,
+       const vk::BufferUsageFlags &flags,
        bool external = false)
 {
 	DeallocationQueue dq;
-	Buffer buffer =
-		littlevk::buffer(device, properties, vec.size() * sizeof(T),
-				 flags, external)
-			.defer(dq);
+	Buffer buffer = littlevk::buffer(device, properties,
+		vec.size() * sizeof(T), flags, external).defer(dq);
 	upload(device, buffer, vec);
-	return {buffer, dq};
+	return { buffer, dq };
 }
 
 template <typename T, size_t N>
 inline FilledBufferReturnProxy
 buffer(const vk::Device &device,
        const vk::PhysicalDeviceMemoryProperties &properties,
-       const std::array<T, N> &vec, const vk::BufferUsageFlags &flags,
+       const std::array <T, N> &array,
+       const vk::BufferUsageFlags &flags,
        bool external = false)
 {
 	DeallocationQueue dq;
-	Buffer buffer =
-		littlevk::buffer(device, properties, vec.size() * sizeof(T),
-				 flags, external)
-			.defer(dq);
-	upload(device, buffer, vec);
-	return {buffer, dq};
+	Buffer buffer = littlevk::buffer(device, properties,
+		array.size() * sizeof(T), flags, external).defer(dq);
+	upload(device, buffer, array);
+	return { buffer, dq };
 }
 
 template <typename T>
 inline FilledBufferReturnProxy
 buffer(const vk::Device &device,
        const vk::PhysicalDeviceMemoryProperties &properties,
-       const T *const data, size_t size, const vk::BufferUsageFlags &flags,
+       const T *const data,
+       size_t size,
+       const vk::BufferUsageFlags &flags,
        bool external = false)
 {
 	DeallocationQueue dq;
-	Buffer buffer =
-		littlevk::buffer(device, properties, size, flags, external)
-			.defer(dq);
+	Buffer buffer = littlevk::buffer(device, properties,
+		size, flags, external).defer(dq);
 	upload(device, buffer, data);
-	return {buffer, dq};
+	return { buffer, dq };
 }
 
 // TODO: overload with size
 inline void upload(const vk::Device &device, const Buffer &buffer,
 		   const void *data)
 {
-	void *mapped =
-		device.mapMemory(buffer.memory, 0, buffer.requirements.size);
+	void *mapped = device.mapMemory(buffer.memory, 0, buffer.requirements.size);
 	std::memcpy(mapped, data, buffer.requirements.size);
 	device.unmapMemory(buffer.memory);
 }
 
 template <typename T>
-inline void upload(const vk::Device &device, const Buffer &buffer,
-		   const std::vector<T> &vec)
+inline void upload(const vk::Device &device,
+		   const Buffer &buffer,
+		   const std::vector <T> &vec)
 {
-	size_t size =
-		std::min(buffer.requirements.size, vec.size() * sizeof(T));
+	size_t size = std::min(buffer.requirements.size, vec.size() * sizeof(T));
 	void *mapped = device.mapMemory(buffer.memory, 0, size);
 	std::memcpy(mapped, vec.data(), size);
 	device.unmapMemory(buffer.memory);
 
 	// Warn if fewer elements were transferred
-	// TODO: or return some kind of error code?
-	if (size < vec.size() * sizeof(T))
-		microlog::warning("upload", "Fewer elements were transferred "
-					    "than may have been expected");
+	if (size < vec.size() * sizeof(T)) {
+		microlog::warning("upload",
+			"Fewer elements were transferred from the "
+			"vector than may have been expected\n");
+	}
 }
 
 template <typename T, size_t N>
 inline void upload(const vk::Device &device, const Buffer &buffer,
-		   const std::array<T, N> &arr)
+		   const std::array <T, N> &arr)
 {
-	size_t size =
-		std::min(buffer.requirements.size, arr.size() * sizeof(T));
+	size_t size = std::min(buffer.requirements.size, arr.size() * sizeof(T));
 	void *mapped = device.mapMemory(buffer.memory, 0, size);
 	std::memcpy(mapped, arr.data(), size);
 	device.unmapMemory(buffer.memory);
 
 	// Warn if fewer elements were transferred
-	if (size < N * sizeof(T))
-		microlog::warning("upload", "Fewer elements were transferred "
-					    "than may have been expected");
+	if (size < N * sizeof(T)) {
+		microlog::warning("upload",
+			"Fewer elements were transferred from the "
+			"array than may have been expected");
+	}
 }
 
 inline void download(const vk::Device &device, const Buffer &buffer, void *data)
 {
-	void *mapped =
-		device.mapMemory(buffer.memory, 0, buffer.requirements.size);
+	void *mapped = device.mapMemory(buffer.memory, 0, buffer.requirements.size);
 	std::memcpy(data, mapped, buffer.requirements.size);
 	device.unmapMemory(buffer.memory);
 }
@@ -3377,12 +3376,12 @@ struct PipelineAssembler <eGraphics> {
 		return *this;
 	}
 
-	PipelineAssembler &polygon_mode(const vk::PolygonMode &pmode) {
+	PipelineAssembler &polygon_mode(vk::PolygonMode pmode) {
 		fill = pmode;
 		return *this;
 	}
 
-	PipelineAssembler &cull_mode(const vk::CullModeFlags &cmode) {
+	PipelineAssembler &cull_mode(vk::CullModeFlags cmode) {
 		culling = cmode;
 		return *this;
 	}
@@ -3402,7 +3401,7 @@ struct PipelineAssembler <eGraphics> {
 	}
 
 	template <size_t N>
-	PipelineAssembler &with_dsl_bindings(const std::array<vk::DescriptorSetLayoutBinding, N> &bindings) {
+	PipelineAssembler &with_dsl_bindings(const std::array <vk::DescriptorSetLayoutBinding, N> &bindings) {
 		for (const auto &binding : bindings)
 			dsl_bindings.push_back(binding);
 		return *this;
@@ -3410,15 +3409,14 @@ struct PipelineAssembler <eGraphics> {
 
 	template <typename T>
 	PipelineAssembler &with_push_constant(vk::ShaderStageFlags stage, uint32_t offset = 0) {
-		push_constants.push_back(
-			vk::PushConstantRange {stage, offset, sizeof(T)});
+		push_constants.push_back({ stage, offset, sizeof(T) });
 		return *this;
 	}
 
 	Pipeline compile() const {
 		Pipeline pipeline;
 
-		std::vector<vk::DescriptorSetLayout> dsls;
+		std::vector <vk::DescriptorSetLayout> dsls;
 		if (dsl_bindings.size()) {
 			vk::DescriptorSetLayout dsl = descriptor_set_layout(device,
 				vk::DescriptorSetLayoutCreateInfo {
