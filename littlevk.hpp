@@ -1099,19 +1099,14 @@ struct RenderPassAssembler {
 	const vk::Device &device;
 	littlevk::Deallocator &dal;
 
-	std::vector<vk::SubpassDescription> subpasses;
-	std::vector<vk::AttachmentDescription> attachments;
-	std::vector<vk::SubpassDependency> dependencies;
+	std::vector <vk::SubpassDescription> subpasses;
+	std::vector <vk::AttachmentDescription> attachments;
+	std::vector <vk::SubpassDependency> dependencies;
 
-	RenderPassAssembler(const vk::Device &device_,
-			    littlevk::Deallocator &dal_)
+	RenderPassAssembler(const vk::Device &device_, littlevk::Deallocator &dal_)
 		: device(device_), dal(dal_) {}
 
-	// TODO: use a tuple builder or so to ctime record the attachments and
-	// verifying everything
-	RenderPassAssembler &
-	add_attachment(const vk::AttachmentDescription &description)
-	{
+	RenderPassAssembler &add_attachment(const vk::AttachmentDescription &description) {
 		attachments.push_back(description);
 		return *this;
 	}
@@ -1127,33 +1122,24 @@ struct RenderPassAssembler {
 
 		SubpassAssembler(RenderPassAssembler &parent_,
 				 const vk::PipelineBindPoint &bindpoint_)
-		    : parent(parent_), bindpoint(bindpoint_)
-		{
-		}
+		    : parent(parent_), bindpoint(bindpoint_) {}
 
-		SubpassAssembler &input_attachment(uint32_t attachment,
-						   vk::ImageLayout layout)
-		{
+		SubpassAssembler &input_attachment(uint32_t attachment, vk::ImageLayout layout) {
 			inputs.emplace_back(attachment, layout);
 			return *this;
 		}
 
-		SubpassAssembler &color_attachment(uint32_t attachment,
-						   vk::ImageLayout layout)
-		{
+		SubpassAssembler &color_attachment(uint32_t attachment, vk::ImageLayout layout) {
 			colors.emplace_back(attachment, layout);
 			return *this;
 		}
 
-		SubpassAssembler &depth_attachment(uint32_t attachment,
-						   vk::ImageLayout layout)
-		{
+		SubpassAssembler &depth_attachment(uint32_t attachment, vk::ImageLayout layout) {
 			depth = vk::AttachmentReference(attachment, layout);
 			return *this;
 		}
 
-		RenderPassAssembler &done()
-		{
+		RenderPassAssembler &done() {
 			// TODO: push this struct onto the rp assembler
 			parent.subpasses.push_back(vk::SubpassDescription {
 				{},
@@ -1168,120 +1154,81 @@ struct RenderPassAssembler {
 		}
 	};
 
-	SubpassAssembler add_subpass(const vk::PipelineBindPoint &bindpoint)
-	{
+	SubpassAssembler add_subpass(const vk::PipelineBindPoint &bindpoint) {
 		return SubpassAssembler(*this, bindpoint);
 	}
 
-	RenderPassAssembler &
-	add_dependency(uint32_t src, uint32_t dst,
-		       const vk::PipelineStageFlags &src_mask,
-		       const vk::PipelineStageFlags &dst_mask)
-	{
+	RenderPassAssembler &add_dependency(uint32_t src,
+					    uint32_t dst,
+					    const vk::PipelineStageFlags &src_mask,
+					    const vk::PipelineStageFlags &dst_mask) {
 		dependencies.emplace_back(src, dst, src_mask, dst_mask);
 		return *this;
 	}
 
-	operator vk::RenderPass()
-	{
-		return littlevk::render_pass(device, attachments, subpasses,
-					     dependencies)
-			.unwrap(dal);
+	operator vk::RenderPass() {
+		return littlevk::render_pass(device,
+			attachments, subpasses, dependencies).unwrap(dal);
 	}
 };
 
 // Vulkan render pass begin info wrapper
-template <size_t AttachmentCount>
 struct RenderPassBeginInfo {
-	vk::RenderPass m_render_pass;
-	vk::Framebuffer m_framebuffer;
-	vk::Extent2D m_extent;
-	std::array<vk::ClearValue, AttachmentCount> m_clear_values;
+	vk::RenderPass render_pass;
+	vk::Framebuffer framebuffer;
+	vk::Extent2D extent;
+	std::vector <vk::ClearValue> clear_values;
+
+	RenderPassBeginInfo(size_t N) : clear_values(N) {}
 
 	operator vk::RenderPassBeginInfo() const {
-		return vk::RenderPassBeginInfo(m_render_pass,
-				               m_framebuffer,
-					       {{0, 0}, m_extent},
-					       m_clear_values);
+		return vk::RenderPassBeginInfo {
+			render_pass,
+			framebuffer,
+			vk::Rect2D { { 0, 0 }, extent },
+			clear_values
+		};
 	}
 
-	RenderPassBeginInfo render_pass(vk::RenderPass render_pass) && {
-		m_render_pass = render_pass;
-		return std::move(*this);
+	RenderPassBeginInfo &with_render_pass(vk::RenderPass render_pass_) {
+		render_pass = render_pass_;
+		return *this;
 	}
 
-	RenderPassBeginInfo framebuffer(vk::Framebuffer framebuffer) && {
-		m_framebuffer = framebuffer;
-		return std::move(*this);
+	RenderPassBeginInfo &with_framebuffer(vk::Framebuffer framebuffer_) {
+		framebuffer = framebuffer_;
+		return *this;
 	}
 
-	RenderPassBeginInfo extent(vk::Extent2D extent) && {
-		m_extent = extent;
-		return std::move(*this);
+	RenderPassBeginInfo &with_extent(vk::Extent2D extent_) {
+		extent = extent_;
+		return *this;
 	}
 
 	template <typename... Args>
-	requires std::is_constructible_v<vk::ClearColorValue, Args...>
-	RenderPassBeginInfo clear_color(size_t index, const Args &...args) && {
-		m_clear_values[index] = vk::ClearColorValue(args...);
-		return std::move(*this);
+	requires std::is_constructible_v <vk::ClearColorValue, Args...>
+	RenderPassBeginInfo &clear_color(size_t index, const Args &...args) {
+		clear_values[index] = vk::ClearColorValue(args...);
+		return *this;
 	}
 
 	template <typename... Args>
 	requires std::is_constructible_v <vk::ClearDepthStencilValue, Args...>
-	RenderPassBeginInfo clear_depth(size_t index, const Args &...args) && {
-		m_clear_values[index] = vk::ClearDepthStencilValue(args...);
-		return std::move(*this);
+	RenderPassBeginInfo &clear_depth(size_t index, const Args &...args) {
+		clear_values[index] = vk::ClearDepthStencilValue(args...);
+		return *this;
 	}
 
-	RenderPassBeginInfo clear_value(size_t index, vk::ClearValue clear_value) && {
-		m_clear_values[index] = clear_value;
-		return std::move(*this);
+	RenderPassBeginInfo &clear_value(size_t index, vk::ClearValue clear_value) {
+		clear_values[index] = clear_value;
+		return *this;
+	}
+
+	RenderPassBeginInfo &begin(const vk::CommandBuffer &cmd, const vk::SubpassContents contents = vk::SubpassContents::eInline) {
+		cmd.beginRenderPass((vk::RenderPassBeginInfo) *this, contents);
+		return *this;
 	}
 };
-
-// Presets
-template <size_t AttachmentCount>
-inline RenderPassBeginInfo<AttachmentCount>
-default_rp_begin_info(const vk::RenderPass &render_pass,
-		      const vk::Framebuffer &framebuffer,
-		      const vk::Extent2D &extent)
-{
-	// Infers attachment layouts
-	static_assert(AttachmentCount == 1 || AttachmentCount == 2,
-		      "Can only infer up to two attachments");
-
-	// 1: Color only
-	if constexpr (AttachmentCount == 1) {
-		return RenderPassBeginInfo<AttachmentCount>()
-			.render_pass(render_pass)
-			.framebuffer(framebuffer)
-			.extent(extent)
-			.clear_color(0, std::array<float, 4> {0.0f, 0.0f, 0.0f,
-							      1.0f});
-	}
-
-	// 2: Color + Depth
-	if constexpr (AttachmentCount == 2) {
-		return RenderPassBeginInfo<AttachmentCount>()
-			.render_pass(render_pass)
-			.framebuffer(framebuffer)
-			.extent(extent)
-			.clear_color(0, std::array<float, 4> {0.0f, 0.0f, 0.0f,
-							      1.0f})
-			.clear_depth(1, 1.0f, 0);
-	}
-}
-
-template <size_t AttachmentCount>
-inline RenderPassBeginInfo <AttachmentCount>
-default_rp_begin_info(const vk::RenderPass &render_pass,
-		      const vk::Framebuffer &framebuffer,
-		      const Window &window)
-{
-	return default_rp_begin_info <AttachmentCount>
-		(render_pass, framebuffer, window.extent);
-}
 
 // Configuring viewport and scissor
 struct RenderArea {
