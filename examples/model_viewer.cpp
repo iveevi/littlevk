@@ -447,14 +447,16 @@ int main(int argc, char *argv[])
 		const auto &cmd = command_buffers[frame];
 		cmd.begin(vk::CommandBufferBeginInfo {});
 
-		const auto &rpbi = littlevk::default_rp_begin_info <2>
-			(render_pass, framebuffers[op.index], app.window);
-
-		// Start the render pass
-		cmd.beginRenderPass(rpbi, vk::SubpassContents::eInline);
-
 		// Set viewport and scissor
 		littlevk::viewport_and_scissor(cmd, littlevk::RenderArea(app.window));
+
+		littlevk::RenderPassBeginInfo(2)
+			.with_render_pass(render_pass)
+			.with_framebuffer(framebuffers[op.index])
+			.with_extent(app.window.extent)
+			.clear_color(0, std::array <float, 4> { 0, 0, 0, 0 })
+			.clear_depth(1, 1)
+			.begin(cmd);
 
 		// Render the triangle
 		MVP push_constants;

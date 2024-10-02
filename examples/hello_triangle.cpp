@@ -132,10 +132,12 @@ int main()
 		// Set viewport and scissor
 		littlevk::viewport_and_scissor(cmd, littlevk::RenderArea(app.window));
 
-		const auto &rpbi = littlevk::default_rp_begin_info <1>
-			(render_pass, framebuffers[op.index], app.window);
-
-		cmd.beginRenderPass(rpbi, vk::SubpassContents::eInline);
+		littlevk::RenderPassBeginInfo(1)
+			.with_render_pass(render_pass)
+			.with_framebuffer(framebuffers[op.index])
+			.with_extent(app.window.extent)
+			.clear_color(0, std::array <float, 4> { 0, 0, 0, 0 })
+			.begin(cmd);
 
 		// Render the triangle
 		cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, ppl.handle);

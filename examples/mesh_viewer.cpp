@@ -293,26 +293,21 @@ int main(int argc, char *argv[])
 			continue;
 		}
 
-		// Start empty render pass
-		std::array <vk::ClearValue, 2> clear_values {
-			vk::ClearColorValue { std::array <float, 4> { 0.0f, 0.0f, 0.0f, 1.0f } },
-			vk::ClearDepthStencilValue { 1.0f, 0 }
-		};
-
-		vk::RenderPassBeginInfo render_pass_info {
-			render_pass, framebuffers[op.index],
-			vk::Rect2D { {}, app.window.extent },
-			clear_values
-		};
-
 		// Record command buffer
 		vk::CommandBuffer &cmd = command_buffers[frame];
 
-		cmd.begin(vk::CommandBufferBeginInfo {});
-		cmd.beginRenderPass(render_pass_info, vk::SubpassContents::eInline);
+		cmd.begin(vk::CommandBufferBeginInfo());
 
 		// Set viewport and scissor
 		littlevk::viewport_and_scissor(cmd, littlevk::RenderArea(app.window));
+
+		littlevk::RenderPassBeginInfo(2)
+			.with_render_pass(render_pass)
+			.with_framebuffer(framebuffers[op.index])
+			.with_extent(app.window.extent)
+			.clear_color(0, std::array <float, 4> { 0, 0, 0, 0 })
+			.clear_depth(1, 1)
+			.begin(cmd);
 
 		// Render the triangle
 		MVP push_constants;
