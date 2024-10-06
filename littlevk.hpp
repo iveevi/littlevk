@@ -1654,8 +1654,10 @@ find_memory_type(const vk::PhysicalDeviceMemoryProperties &mem_props,
 
 inline BufferReturnProxy
 buffer(const vk::Device &device,
-       const vk::PhysicalDeviceMemoryProperties &properties, size_t size,
-       const vk::BufferUsageFlags &flags, bool external = false)
+       const vk::PhysicalDeviceMemoryProperties &properties,
+       size_t size,
+       const vk::BufferUsageFlags &flags,
+       bool external = false)
 {
 	Buffer buffer;
 
@@ -2566,7 +2568,7 @@ constexpr inline LinkedCommandQueue bind(const vk::Device &device,
 
 // Bind pattern to do all allocations at once, then unpack
 template <typename... Args>
-struct LinkedDeviceAllocator : std::tuple<Args...> {
+struct LinkedDeviceAllocator : std::tuple <Args...> {
 	const vk::Device &device;
 	const vk::PhysicalDeviceMemoryProperties &properties;
 	littlevk::Deallocator &dal;
@@ -2667,10 +2669,11 @@ struct LinkedDescriptorUpdater {
 		}
 	}
 
-	LinkedDescriptorUpdater &update(uint32_t binding, uint32_t element,
-					const vk::Sampler &sampler,
-					const vk::ImageView &view,
-					const vk::ImageLayout &layout) {
+	LinkedDescriptorUpdater &queue_update(uint32_t binding,
+					      uint32_t element,
+					      const vk::Sampler &sampler,
+					      const vk::ImageView &view,
+					      const vk::ImageLayout &layout) {
 		image_infos.emplace_back(sampler, view, layout);
 		image_indices.push_back(writes.size());
 		writes.emplace_back(dset, binding, element,
@@ -2679,11 +2682,11 @@ struct LinkedDescriptorUpdater {
 		return *this;
 	}
 
-	LinkedDescriptorUpdater &update(uint32_t binding,
-			                uint32_t element,
-					const vk::Buffer &buffer,
-					uint32_t offset,
-					uint32_t range) {
+	LinkedDescriptorUpdater &queue_update(uint32_t binding,
+			                      uint32_t element,
+					      const vk::Buffer &buffer,
+					      uint32_t offset,
+					      uint32_t range) {
 		buffer_infos.emplace_back(buffer, offset, range);
 		buffer_indices.push_back(writes.size());
 		writes.emplace_back(dset, binding, element,
