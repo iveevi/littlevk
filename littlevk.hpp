@@ -2648,6 +2648,17 @@ struct DescriptorUpdateQueue {
 	DescriptorUpdateQueue(const vk::DescriptorSet &descriptor_,
 			      const std::vector <vk::DescriptorSetLayoutBinding> &bindings_)
 			: descriptor(descriptor_), bindings(bindings_) {}
+	
+	DescriptorUpdateQueue(const vk::DescriptorSet &descriptor_,
+			      const std::map <uint32_t, vk::DescriptorSetLayoutBinding> &bindings_)
+			: descriptor(descriptor_) {
+		for (auto &[k, v] : bindings_) {
+			if (k >= bindings.size())
+				bindings.resize(k + 1);
+
+			bindings[k] = v;
+		}
+	}
 
 	// Allow for arbitrarily many updates; enable partial/full updates
 	std::list <vk::DescriptorImageInfo> image_infos;
