@@ -2640,12 +2640,63 @@ constexpr LinkedDeviceDescriptorPool bind(const vk::Device &device, const vk::De
 	return { device, pool };
 }
 
+// Descriptor set update structure
+struct DescriptorUpdateQueue {
+	vk::DescriptorSet descriptor;
+	std::vector <vk::DescriptorSetLayoutBinding> bindings;
+
+	DescriptorUpdateQueue(const vk::DescriptorSet &descriptor_,
+			      const std::vector <vk::DescriptorSetLayoutBinding> &bindings_)
+			: descriptor(descriptor_), bindings(bindings_) {}
+
+	// Allow for arbitrarily many updates; enable partial/full updates
+	std::list <vk::DescriptorImageInfo> image_infos;
+	std::list <vk::DescriptorBufferInfo> buffer_infos;
+	std::vector <vk::WriteDescriptorSet> writes;
+	
+	DescriptorUpdateQueue &queue_update(uint32_t binding,
+					    uint32_t element,
+					    const vk::Sampler &sampler,
+					    const vk::ImageView &view,
+					    const vk::ImageLayout &layout) {
+		image_infos.emplace_back(sampler, view, layout);
+
+		auto &info = image_infos.back();
+		writes.emplace_back(descriptor, binding, element,
+			bindings[binding].descriptorCount,
+			bindings[binding].descriptorType,
+			&info, nullptr, nullptr);
+
+		return *this;
+	}
+
+	DescriptorUpdateQueue &queue_update(uint32_t binding,
+					    uint32_t element,
+					    const vk::Buffer &buffer,
+					    uint32_t offset,
+					    uint32_t range) {
+		buffer_infos.emplace_back(buffer, offset, range);
+
+		auto &info = buffer_infos.back();
+		writes.emplace_back(descriptor, binding, element,
+			bindings[binding].descriptorCount,
+			bindings[binding].descriptorType,
+			nullptr, &info, nullptr);
+
+		return *this;
+	}
+
+	void apply(const vk::Device &device) const {
+		device.updateDescriptorSets(writes, nullptr);
+	}
+};
+
 // Descriptor set update structures
-template <size_t N>
+// TODO: deprecate
 struct LinkedDescriptorUpdater {
 	const vk::Device &device;
 	const vk::DescriptorSet &dset;
-	const std::array <vk::DescriptorSetLayoutBinding, N> &bindings;
+	const std::vector <vk::DescriptorSetLayoutBinding> &bindings;
 
 	// Allow for arbitrarily many updates; enable partial/full updates
 	std::vector <vk::DescriptorImageInfo> image_infos;
@@ -2656,17 +2707,16 @@ struct LinkedDescriptorUpdater {
 
 	LinkedDescriptorUpdater(const vk::Device &device_,
 			        const vk::DescriptorSet &dset_,
-				const std::array <vk::DescriptorSetLayoutBinding, N> &bindings_)
+				const std::vector <vk::DescriptorSetLayoutBinding> &bindings_)
 		: device(device_), dset(dset_), bindings(bindings_) {}
 
 	~LinkedDescriptorUpdater() {
-		if (!writes.empty()) {
-			microlog::warning("linked_descriptor_updator",
-					  "Updates to descriptor set (handle = "
-					  "%p) where invoked, "
-					  "but never finalized.\n",
-					  (void *) dset);
-		}
+		if (writes.empty())
+			return;
+
+		microlog::warning("linked_descriptor_updator",
+			"Updates to descriptor set (handle = %p) where invoked, "
+			"but never finalized.\n", (void *) dset);
 	}
 
 	LinkedDescriptorUpdater &queue_update(uint32_t binding,
@@ -2723,10 +2773,9 @@ struct LinkedDescriptorUpdater {
 	}
 };
 
-template <size_t N>
-constexpr LinkedDescriptorUpdater <N> bind(const vk::Device &device,
-		                           const vk::DescriptorSet &dset,
-					   const std::array <vk::DescriptorSetLayoutBinding, N> &bindings)
+inline LinkedDescriptorUpdater bind(const vk::Device &device,
+		        	    const vk::DescriptorSet &dset,
+				    const std::vector <vk::DescriptorSetLayoutBinding> &bindings)
 {
 	return { device, dset, bindings };
 }
