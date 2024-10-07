@@ -3293,7 +3293,8 @@ struct ShaderStageBundle {
 struct Pipeline {
 	vk::Pipeline handle;
 	vk::PipelineLayout layout;
-	std::optional<vk::DescriptorSetLayout> dsl;
+	std::optional <vk::DescriptorSetLayout> dsl;
+	std::map <uint32_t, vk::DescriptorSetLayoutBinding> bindings;
 };
 
 // General purpose pipeline compiler
@@ -3448,6 +3449,10 @@ struct PipelineAssembler <eGraphics> {
 		pipeline_info.depth_write = depth_write;
 
 		pipeline.handle = littlevk::pipeline::compile(device, pipeline_info).unwrap(dal);
+
+		// Build the binding map
+		for (auto &dslb : dsl_bindings)
+			pipeline.bindings[dslb.binding] = dslb;
 
 		return pipeline;
 	}
