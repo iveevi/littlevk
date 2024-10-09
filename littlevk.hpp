@@ -3367,13 +3367,22 @@ struct PipelineAssembler <eGraphics> {
 		return *this;
 	}
 
-	// TODO: non template version
 	template <typename ... Args>
 	PipelineAssembler &with_vertex_layout(const VertexLayout <Args...> &) {
 		using layout = VertexLayout <Args...>;
 		vertex_binding = layout::binding;
 		vertex_attributes = std::vector <vk::VertexInputAttributeDescription>
 			(layout::attributes.begin(), layout::attributes.end());
+		return *this;
+	}
+
+	PipelineAssembler &with_vertex_binding(const vk::VertexInputBindingDescription &binding) {
+		vertex_binding = binding;
+		return *this;
+	}
+	
+	PipelineAssembler &with_vertex_attributes(const std::vector <vk::VertexInputAttributeDescription> &attributes) {
+		vertex_attributes = attributes;
 		return *this;
 	}
 
