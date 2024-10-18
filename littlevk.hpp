@@ -161,14 +161,13 @@ struct DirectoryIncluder : public glslang::TShader::Includer {
 
 	DirectoryIncluder() = default;
 
-	IncludeResult *includeLocal(const char *header, const char *includer,
-				    size_t depth) override
+	IncludeResult *includeLocal(const char *header,
+	                            const char *includer, size_t depth) override
 	{
 		return read_local_path(header, includer, (int) depth);
 	}
 
-	IncludeResult *includeSystem(const char *header, const char *includer,
-				     size_t depth) override
+	IncludeResult *includeSystem(const char *, const char *, size_t) override
 	{
 		return nullptr;
 	}
@@ -342,7 +341,7 @@ debug_logger(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
 	if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
 		microlog::error("validation", "%s\n", pCallbackData->pMessage);
 		if (config().abort_on_validation_error)
-			abort();
+			__builtin_trap();
 	}
 	else if (messageSeverity >=
 		 VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
@@ -685,12 +684,12 @@ inline QueueFamilyIndices find_queue_families(const vk::PhysicalDevice &phdev,
 // Swapchain structure
 struct Swapchain {
 	vk::Format format;
-	vk::SwapchainKHR swapchain;
+	vk::SwapchainKHR handle;
 	std::vector<vk::Image> images;
 	std::vector<vk::ImageView> image_views;
 	vk::SwapchainCreateInfoKHR info;
 
-	vk::SwapchainKHR operator*() const { return swapchain; }
+	vk::SwapchainKHR operator*() const { return handle; }
 };
 
 // Pick a surface format
@@ -843,10 +842,10 @@ inline Swapchain swapchain(const vk::PhysicalDevice &phdev,
 	}
 
 	// Create the swapchain
-	swapchain.swapchain = device.createSwapchainKHR(swapchain.info);
+	swapchain.handle = device.createSwapchainKHR(swapchain.info);
 
 	// Get the swapchain images
-	swapchain.images = device.getSwapchainImagesKHR(swapchain.swapchain);
+	swapchain.images = device.getSwapchainImagesKHR(swapchain.handle);
 
 	// Create image views
 	vk::ImageViewCreateInfo create_view_info {
@@ -863,20 +862,18 @@ inline Swapchain swapchain(const vk::PhysicalDevice &phdev,
 	return swapchain;
 }
 
-inline void resize(const vk::Device &device,
-		   Swapchain &swapchain,
-		   const vk::Extent2D &extent)
+inline void resize(const vk::Device &device, Swapchain &swapchain, const vk::Extent2D &extent)
 {
 	// First free the old swapchain resources
 	for (const vk::ImageView &view : swapchain.image_views)
 		device.destroyImageView(view);
 
-	device.destroySwapchainKHR(swapchain.swapchain);
+	device.destroySwapchainKHR(swapchain.handle);
 
 	// We simply need to modify the swapchain info and rebuild it
 	swapchain.info.imageExtent = extent;
-	swapchain.swapchain = device.createSwapchainKHR(swapchain.info);
-	swapchain.images = device.getSwapchainImagesKHR(swapchain.swapchain);
+	swapchain.handle = device.createSwapchainKHR(swapchain.info);
+	swapchain.images = device.getSwapchainImagesKHR(swapchain.handle);
 
 	// Recreate image views
 	vk::ImageViewCreateInfo create_view_info {
@@ -902,12 +899,11 @@ inline void destroy_swapchain(const vk::Device &device, Swapchain &swapchain)
 		device.destroyImageView(view);
 
 	// Destroy swapchain
-	device.destroySwapchainKHR(swapchain.swapchain);
+	device.destroySwapchainKHR(swapchain.handle);
 }
 
 // Return proxy for framebuffer(s)
-static void destroy_framebuffer(const vk::Device &device,
-				const vk::Framebuffer &framebuffer)
+inline void destroy_framebuffer(const vk::Device &device, const vk::Framebuffer &framebuffer)
 {
 	device.destroyFramebuffer(framebuffer);
 }
@@ -928,7 +924,9 @@ struct FramebufferGenerator {
 			     const vk::RenderPass &render_pass_,
 			     const vk::Extent2D &extent_,
 			     Deallocator &dal_)
-		: device(device_), render_pass(render_pass_), extent(extent_),
+		: device(device_),
+		render_pass(render_pass_),
+		extent(extent_),
 		dal(dal_) {}
 
 	template <typename... Args>
@@ -965,72 +963,56 @@ struct AttachmentDescription {
 	vk::ImageLayout m_initial_layout;
 	vk::ImageLayout m_final_layout;
 
-	constexpr operator vk::AttachmentDescription() const
-	{
+	constexpr operator vk::AttachmentDescription() const {
 		return vk::AttachmentDescription(
 			{}, m_format, m_samples, m_load_op, m_store_op,
 			m_stencil_load_op, m_stencil_store_op, m_initial_layout,
 			m_final_layout);
 	}
 
-	constexpr AttachmentDescription &format(vk::Format format)
-	{
+	constexpr AttachmentDescription &format(vk::Format format) {
 		this->m_format = format;
 		return *this;
 	}
 
-	constexpr AttachmentDescription &
-	samples(vk::SampleCountFlagBits samples)
-	{
+	constexpr AttachmentDescription &samples(vk::SampleCountFlagBits samples) {
 		this->m_samples = samples;
 		return *this;
 	}
 
-	constexpr AttachmentDescription &load_op(vk::AttachmentLoadOp load_op)
-	{
+	constexpr AttachmentDescription &load_op(vk::AttachmentLoadOp load_op) {
 		this->m_load_op = load_op;
 		return *this;
 	}
 
-	constexpr AttachmentDescription &
-	store_op(vk::AttachmentStoreOp store_op)
-	{
+	constexpr AttachmentDescription &store_op(vk::AttachmentStoreOp store_op) {
 		this->m_store_op = store_op;
 		return *this;
 	}
 
-	constexpr AttachmentDescription &
-	stencil_load_op(vk::AttachmentLoadOp stencil_load_op)
-	{
+	constexpr AttachmentDescription &stencil_load_op(vk::AttachmentLoadOp stencil_load_op) {
 		this->m_stencil_load_op = stencil_load_op;
 		return *this;
 	}
 
-	constexpr AttachmentDescription &
-	stencil_store_op(vk::AttachmentStoreOp stencil_store_op)
-	{
+	constexpr AttachmentDescription &stencil_store_op(vk::AttachmentStoreOp stencil_store_op) {
 		this->m_stencil_store_op = stencil_store_op;
 		return *this;
 	}
 
-	constexpr AttachmentDescription &
-	initial_layout(vk::ImageLayout initial_layout)
-	{
+	constexpr AttachmentDescription &initial_layout(vk::ImageLayout initial_layout) {
 		this->m_initial_layout = initial_layout;
 		return *this;
 	}
 
-	constexpr AttachmentDescription &
-	final_layout(vk::ImageLayout final_layout)
-	{
+	constexpr AttachmentDescription &final_layout(vk::ImageLayout final_layout) {
 		this->m_final_layout = final_layout;
 		return *this;
 	}
 };
 
 // Preset attachment descriptions
-constexpr AttachmentDescription
-default_color_attachment(const vk::Format &swapchain_format)
+constexpr AttachmentDescription default_color_attachment(const vk::Format &swapchain_format)
 {
 	return AttachmentDescription()
 		.format(swapchain_format)
@@ -1076,17 +1058,17 @@ inline RenderPassReturnProxy render_pass(const vk::Device &device,
 	return std::move(render_pass);
 }
 
-inline RenderPassReturnProxy render_pass(
-	const vk::Device &device,
-	const vk::ArrayProxyNoTemporaries<vk::AttachmentDescription>
-		&descriptions,
-	const vk::ArrayProxyNoTemporaries<vk::SubpassDescription> &subpasses,
-	const vk::ArrayProxyNoTemporaries<vk::SubpassDependency> &dependencies)
+inline RenderPassReturnProxy render_pass(const vk::Device &device,
+					 const vk::ArrayProxyNoTemporaries <vk::AttachmentDescription> &descriptions,
+					 const vk::ArrayProxyNoTemporaries <vk::SubpassDescription> &subpasses,
+					 const vk::ArrayProxyNoTemporaries <vk::SubpassDependency> &dependencies)
 {
-	vk::RenderPass render_pass;
 	vk::RenderPassCreateInfo info {
-		{}, descriptions, subpasses, dependencies};
+		{}, descriptions,
+		subpasses, dependencies
+	};
 
+	vk::RenderPass render_pass;
 	if (device.createRenderPass(&info, nullptr, &render_pass) !=
 	    vk::Result::eSuccess)
 		return true;
@@ -1116,9 +1098,9 @@ struct RenderPassAssembler {
 
 		vk::PipelineBindPoint bindpoint;
 
-		std::vector<vk::AttachmentReference> inputs;
-		std::vector<vk::AttachmentReference> colors;
-		std::optional<vk::AttachmentReference> depth = {};
+		std::vector <vk::AttachmentReference> inputs;
+		std::vector <vk::AttachmentReference> colors;
+		std::optional <vk::AttachmentReference> depth = {};
 
 		SubpassAssembler(RenderPassAssembler &parent_,
 				 const vk::PipelineBindPoint &bindpoint_)
@@ -2648,7 +2630,7 @@ struct DescriptorUpdateQueue {
 	DescriptorUpdateQueue(const vk::DescriptorSet &descriptor_,
 			      const std::vector <vk::DescriptorSetLayoutBinding> &bindings_)
 			: descriptor(descriptor_), bindings(bindings_) {}
-	
+
 	DescriptorUpdateQueue(const vk::DescriptorSet &descriptor_,
 			      const std::map <uint32_t, vk::DescriptorSetLayoutBinding> &bindings_)
 			: descriptor(descriptor_) {
@@ -2664,7 +2646,7 @@ struct DescriptorUpdateQueue {
 	std::list <vk::DescriptorImageInfo> image_infos;
 	std::list <vk::DescriptorBufferInfo> buffer_infos;
 	std::vector <vk::WriteDescriptorSet> writes;
-	
+
 	DescriptorUpdateQueue &queue_update(uint32_t binding,
 					    uint32_t element,
 					    const vk::Sampler &sampler,
@@ -2798,8 +2780,8 @@ using Defines = std::map<std::string, std::string>;
 using Includes = std::set<std::string>;
 
 // Local structs
-struct _compile_out {
-	std::vector<unsigned int> spirv = {};
+struct compile_result {
+	std::vector <unsigned int> spirv = {};
 	std::string log = "";
 	std::string source = "";
 };
@@ -2845,14 +2827,13 @@ inline EShLanguage translate_shader_stage(const vk::ShaderStageFlagBits &stage)
 	return EShLangVertex;
 }
 
-static _compile_out
-glsl_to_spirv(const std::string &source,
-	      const std::set<std::string> &paths,
-	      const std::map <std::string, std::string> &defines,
-	      const vk::ShaderStageFlagBits &shader_type)
+inline compile_result glsl_to_spirv(const std::string &source,
+				    const std::set <std::string> &paths,
+				    const std::map <std::string, std::string> &defines,
+				    const vk::ShaderStageFlagBits &shader_type)
 {
 	// Output
-	_compile_out out;
+	compile_result out;
 
 	// Compile shader
 	EShLanguage stage = translate_shader_stage(shader_type);
@@ -2957,7 +2938,7 @@ compile(const vk::Device &device,
 	glslang::InitializeProcess();
 
 	// Compile shader
-	_compile_out out = glsl_to_spirv(source, includes, defines, shader_type);
+	compile_result out = glsl_to_spirv(source, includes, defines, shader_type);
 	if (!out.log.empty()) {
 		// TODO: show the errornous line(s)
 		microlog::error("shader",
@@ -2985,7 +2966,7 @@ compile(const vk::Device &device,
 
 	// Compile shader
 	std::string source = standalone::readfile(path);
-	_compile_out out = glsl_to_spirv(source, includes, defines, shader_type);
+	compile_result out = glsl_to_spirv(source, includes, defines, shader_type);
 	if (!out.log.empty()) {
 		// TODO: show the errornous line(s)
 		microlog::error(__FUNCTION__,
@@ -3005,22 +2986,22 @@ compile(const vk::Device &device,
 
 namespace pipeline {
 
-static void destroy_pipeline(const vk::Device &device,
-			     const vk::Pipeline &pipeline)
+inline void destroy_pipeline(const vk::Device &device, const vk::Pipeline &pipeline)
 {
 	device.destroyPipeline(pipeline);
 }
 
-using PipelineReturnProxy = DeviceReturnProxy<vk::Pipeline, destroy_pipeline>;
+using PipelineReturnProxy = DeviceReturnProxy <vk::Pipeline, destroy_pipeline>;
 
 // Regular graphics pipeline
 struct GraphicsCreateInfo {
-	std::optional<vk::VertexInputBindingDescription> vertex_binding =
-		std::nullopt;
-	std::optional<vk::ArrayProxy<vk::VertexInputAttributeDescription>>
-		vertex_attributes = std::nullopt;
+	using vertex_binding_t = vk::VertexInputBindingDescription;
+	using vertex_attribute_t = vk::ArrayProxy <vk::VertexInputAttributeDescription>;
 
-	std::vector<vk::PipelineShaderStageCreateInfo> shader_stages;
+	std::optional <vertex_binding_t> vertex_binding = std::nullopt;
+	std::optional <vertex_attribute_t> vertex_attributes = std::nullopt;
+
+	std::vector <vk::PipelineShaderStageCreateInfo> shader_stages;
 
 	vk::Extent2D extent;
 
@@ -3037,8 +3018,7 @@ struct GraphicsCreateInfo {
 	uint32_t subpass;
 };
 
-inline PipelineReturnProxy compile(const vk::Device &device,
-				   const GraphicsCreateInfo &info)
+inline PipelineReturnProxy compile(const vk::Device &device, const GraphicsCreateInfo &info)
 {
 	if (!info.shader_stages.size())
 		microlog::error("pipeline::compile", "Empty shader stages\n");
@@ -3179,8 +3159,7 @@ struct ComputeCreateInfo {
 	vk::PipelineLayout pipeline_layout;
 };
 
-inline PipelineReturnProxy compile(const vk::Device &device,
-				   const ComputeCreateInfo &info)
+inline PipelineReturnProxy compile(const vk::Device &device, const ComputeCreateInfo &info)
 {
 	return device.createComputePipeline(nullptr,
 		vk::ComputePipelineCreateInfo {
@@ -3212,15 +3191,14 @@ template <typename T, typename... Args>
 constexpr size_t sizeof_all()
 {
 	if constexpr (sizeof...(Args))
-		return sizeof(T) + sizeof_all<Args...>();
+		return sizeof(T) + sizeof_all <Args...> ();
 	else
 		return sizeof(T);
 }
 
 template <typename T, bool instantiated = true>
 struct type_translator {
-	static_assert(!instantiated,
-		      "Unsupported format translation for this type");
+	static_assert(!instantiated, "Unsupported format translation for this type");
 	static constexpr vk::Format format = vk::Format::eUndefined;
 };
 
@@ -3228,39 +3206,39 @@ template <uint32_t index, uint32_t offset, typename T>
 constexpr vk::VertexInputAttributeDescription attribute_for()
 {
 	return vk::VertexInputAttributeDescription {
-		index, 0, type_translator<T>::format, offset};
+		index, 0,
+		type_translator <T> ::format,
+		offset
+	};
 }
 
 template <uint32_t index, uint32_t offset, typename T, typename... Args>
-constexpr std::array<vk::VertexInputAttributeDescription, 1 + sizeof...(Args)>
+constexpr std::array <vk::VertexInputAttributeDescription, 1 + sizeof...(Args)>
 attributes_for()
 {
 	if constexpr (sizeof...(Args)) {
-		auto previous = attributes_for<index + 1, offset + sizeof(T),
-					       Args...>();
-		std::array<vk::VertexInputAttributeDescription,
-			   1 + sizeof...(Args)>
-			out;
+		auto previous = attributes_for <index + 1, offset + sizeof(T), Args...> ();
+		std::array <vk::VertexInputAttributeDescription, 1 + sizeof...(Args)> out;
 		out[0] = attribute_for<index, offset, T>();
 		for (uint32_t i = 0; i < sizeof...(Args); i++)
 			out[i + 1] = previous[i];
 		return out;
-	}
-	else {
-		return {attribute_for<index, offset, T>()};
+	} else {
+		return { attribute_for <index, offset, T> () };
 	}
 }
 
 template <typename... Args>
 struct VertexLayout {
-	static constexpr size_t size = sizeof_all<Args...>();
+	static constexpr size_t size = sizeof_all <Args...> ();
 
 	static constexpr vk::VertexInputBindingDescription binding {
-		0, size, vk::VertexInputRate::eVertex};
+		0, size, vk::VertexInputRate::eVertex
+	};
 
-	static constexpr std::array<vk::VertexInputAttributeDescription,
-				    sizeof...(Args)>
-		attributes {attributes_for<0, 0, Args...>()};
+	static constexpr std::array <vk::VertexInputAttributeDescription, sizeof...(Args)> attributes {
+		attributes_for <0, 0, Args...> ()
+	};
 };
 
 // Group of shaders for a pipeline
@@ -3380,7 +3358,7 @@ struct PipelineAssembler <eGraphics> {
 		vertex_binding = binding;
 		return *this;
 	}
-	
+
 	PipelineAssembler &with_vertex_attributes(const std::vector <vk::VertexInputAttributeDescription> &attributes) {
 		vertex_attributes = attributes;
 		return *this;
