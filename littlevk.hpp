@@ -1802,12 +1802,21 @@ struct Image {
 	vk::Extent2D extent;
 	vk::ImageLayout layout;
 
+	Image() : image(VK_NULL_HANDLE),
+		  view(VK_NULL_HANDLE),
+		  memory(VK_NULL_HANDLE),
+		  extent(0, 0) {}
+
 	vk::Image operator*() const {
 		return image;
 	}
 
 	vk::DeviceSize device_size() const {
 		return requirements.size;
+	}
+
+	operator bool() const {
+		return image;
 	}
 
 	void transition(const vk::CommandBuffer &, const vk::ImageLayout &);
