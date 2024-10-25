@@ -3413,6 +3413,12 @@ struct PipelineAssembler <eGraphics> {
 			dsl_bindings.push_back(binding);
 		return *this;
 	}
+	
+	PipelineAssembler &with_dsl_bindings(const std::vector <vk::DescriptorSetLayoutBinding> &bindings) {
+		for (const auto &binding : bindings)
+			dsl_bindings.push_back(binding);
+		return *this;
+	}
 
 	template <typename T>
 	PipelineAssembler &with_push_constant(vk::ShaderStageFlags stage, uint32_t offset = 0) {
