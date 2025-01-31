@@ -18,7 +18,7 @@
 
 // Resource directories
 #ifndef EXAMPLES_DIRETORY
-#define EXAMPLES_DIRECTORY ".."
+#define EXAMPLES_DIRECTORY "./examples"
 #endif
 
 #define SHADERS_DIRECTORY EXAMPLES_DIRECTORY "/shaders"
@@ -179,9 +179,6 @@ std::optional <littlevk::Image> load_texture(App &app, const std::filesystem::pa
 // TODO: destructor
 void destroy_app(App &app)
 {
-	// First wait for all operations to finish
-	app.device.waitIdle();
-
 	// Release all automatically collected references
 	app.deallocator.drop();
 
@@ -284,11 +281,6 @@ int main(int argc, char *argv[])
 
 	std::vector <vk::Framebuffer> framebuffers = generator.unpack();
 
-	// Allocate command buffers
-	auto command_buffers = app.device.allocateCommandBuffers({
-		app.command_pool, vk::CommandBufferLevel::ePrimary, 2
-	});
-
 	// Allocate mesh resources
 	std::vector <VulkanMesh> vk_meshes;
 	for (const auto &mesh : model) {
@@ -321,9 +313,12 @@ int main(int argc, char *argv[])
 		alignas(16) glm::vec3 albedo_color;
 	};
 
-	constexpr std::array <vk::DescriptorSetLayoutBinding, 1> textured_dslbs {
-		{{ 0, vk::DescriptorType::eCombinedImageSampler,
-			 1, vk::ShaderStageFlagBits::eFragment }}
+	std::vector <vk::DescriptorSetLayoutBinding> textured_dslbs {
+		vk::DescriptorSetLayoutBinding()
+			.setBinding(0)
+			.setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+			.setStageFlags(vk::ShaderStageFlagBits::eFragment)
+			.setDescriptorCount(1),
 	};
 
 	auto vertex_layout = littlevk::VertexLayout <littlevk::rgb32f, littlevk::rgb32f, littlevk::rg32f> ();
@@ -366,15 +361,9 @@ int main(int argc, char *argv[])
 			.allocate_descriptor_sets(*textured_ppl.dsl).front();
 
 		littlevk::bind(app.device, vk_mesh.descriptor_set, textured_dslbs)
-			.update(0, 0, vk_mesh.albedo_sampler, vk_mesh.albedo_image.view, vk::ImageLayout::eShaderReadOnlyOptimal)
-			// .offload(writes);
+			.queue_update(0, 0, vk_mesh.albedo_sampler, vk_mesh.albedo_image.view, vk::ImageLayout::eShaderReadOnlyOptimal)
 			.finalize();
 	}
-
-	// app.device.updateDescriptorSets(writes, nullptr);
-
-	// Syncronization primitives
-	auto sync = littlevk::present_syncronization(app.device, 2).unwrap(app.deallocator);
 
 	// Prepare camera and model matrices
 	g_state.center = center;
@@ -412,15 +401,7 @@ int main(int argc, char *argv[])
 		framebuffers = generator.unpack();
 	};
 
-	// Render loop
-        uint32_t frame = 0;
-        while (true) {
-                glfwPollEvents();
-
-		// Event handling
-                if (glfwWindowShouldClose(app.window.handle))
-                        break;
-
+	auto render = [&](const vk::CommandBuffer &cmd, uint32_t index) {
 		// Pause/resume rotation
 		if (glfwGetKey(app.window.handle, GLFW_KEY_SPACE) == GLFW_PRESS) {
 			if (!pause_resume_pressed) {
@@ -435,24 +416,12 @@ int main(int argc, char *argv[])
 			current_time += glfwGetTime() - previous_time;
 		previous_time = glfwGetTime();
 
-		// Rendering
-		littlevk::SurfaceOperation op;
-                op = littlevk::acquire_image(app.device, app.swapchain.swapchain, sync[frame]);
-		if (op.status == littlevk::SurfaceOperation::eResize) {
-			resize();
-			continue;
-		}
-
-		// Record command buffer
-		const auto &cmd = command_buffers[frame];
-		cmd.begin(vk::CommandBufferBeginInfo {});
-
 		// Set viewport and scissor
 		littlevk::viewport_and_scissor(cmd, littlevk::RenderArea(app.window));
 
 		littlevk::RenderPassBeginInfo(2)
 			.with_render_pass(render_pass)
-			.with_framebuffer(framebuffers[op.index])
+			.with_framebuffer(framebuffers[index])
 			.with_extent(app.window.extent)
 			.clear_color(0, std::array <float, 4> { 0, 0, 0, 0 })
 			.clear_depth(1, 1)
@@ -487,27 +456,20 @@ int main(int argc, char *argv[])
 		}
 
 		cmd.endRenderPass();
-		cmd.end();
+        };
 
-		// Submit command buffer while signaling the semaphore
-		constexpr vk::PipelineStageFlags wait_stage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-
-		vk::SubmitInfo submit_info {
-			sync.image_available[frame],
-			wait_stage, cmd,
-			sync.render_finished[frame]
-		};
-
-		app.graphics_queue.submit(submit_info, sync.in_flight[frame]);
-
-                op = littlevk::present_image(app.present_queue, app.swapchain.swapchain, sync[frame], op.index);
-		if (op.status == littlevk::SurfaceOperation::eResize)
-			resize();
-
-		frame = 1 - frame;
-        }
+	littlevk::swapchain_render_loop(app.device,
+		app.graphics_queue,
+		app.present_queue,
+		app.command_pool,
+		app.window,
+		app.swapchain,
+		app.deallocator,
+		render,
+		resize);
 
 	destroy_app(app);
+
 	return 0;
 }
 

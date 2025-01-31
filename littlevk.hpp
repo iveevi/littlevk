@@ -1574,6 +1574,67 @@ inline float Skeleton::aspect_ratio() const
 	return (float) window.extent.width / (float) window.extent.height;
 }
 
+// Primary rendering loop
+inline void swapchain_render_loop(const vk::Device &device,
+				  const vk::Queue &graphics_queue,
+				  const vk::Queue &present_queue,
+				  const vk::CommandPool &command_pool,
+				  const Window &window,
+				  const Swapchain &swapchain,
+				  Deallocator &deallocator,
+				  const std::function <void (const vk::CommandBuffer &, uint32_t)> &render,
+				  const std::function <void ()> &resize)
+{
+	uint32_t count = swapchain.images.size();
+
+	auto sync = littlevk::present_syncronization(device, count).unwrap(deallocator);
+
+	auto command_buffers = device.allocateCommandBuffers({
+		command_pool,
+		vk::CommandBufferLevel::ePrimary,
+		count
+	});
+
+	uint32_t frame = 0;
+
+	while (!glfwWindowShouldClose(window.handle)) {
+		glfwPollEvents();
+
+		littlevk::SurfaceOperation op;
+		op = littlevk::acquire_image(device, swapchain.handle, sync[frame]);
+		if (op.status == littlevk::SurfaceOperation::eResize) {
+			resize();
+			continue;
+		}
+
+		// Start the render pass
+		const auto &cmd = command_buffers[frame];
+
+		cmd.begin(vk::CommandBufferBeginInfo {});
+			render(cmd, op.index);
+		cmd.end();
+
+		// Submit command buffer while signaling the semaphore
+		constexpr vk::PipelineStageFlags wait_stage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+
+		vk::SubmitInfo submit_info {
+			sync.image_available[frame],
+			wait_stage, cmd,
+			sync.render_finished[frame]
+		};
+
+		graphics_queue.submit(submit_info, sync.in_flight[frame]);
+
+		op = littlevk::present_image(present_queue, swapchain.handle, sync[frame], op.index);
+		if (op.status == littlevk::SurfaceOperation::eResize)
+			resize();
+
+		frame = (frame + 1) % count;
+	}
+
+	device.waitIdle();
+}
+
 // Get memory file decriptor
 inline int find_memory_fd(const vk::Device &device,
 			  const vk::DeviceMemory &memory)

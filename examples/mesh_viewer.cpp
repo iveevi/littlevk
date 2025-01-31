@@ -157,9 +157,6 @@ int main(int argc, char *argv[])
 		}
 	).unwrap(deallocator);
 
-	auto command_buffers = app.device.allocateCommandBuffers
-		({ command_pool, vk::CommandBufferLevel::ePrimary, 2 });
-
 	// Allocate mesh buffers
 	littlevk::Buffer vertex_buffer;
 	littlevk::Buffer index_buffer;
@@ -200,9 +197,6 @@ int main(int argc, char *argv[])
 		.with_vertex_layout(vertex_layout)
 		.with_shader_bundle(bundle)
 		.with_push_constant <MVP> (vk::ShaderStageFlagBits::eVertex);
-
-	// Syncronization primitives
-	auto sync = littlevk::present_syncronization(app.device, 2).unwrap(deallocator);
 
 	// Prepare camera and model matrices
 	glm::mat4 model = glm::mat4 { 1.0f };
@@ -245,15 +239,7 @@ int main(int argc, char *argv[])
 		framebuffers = generator.unpack();
 	};
 
-	// Render loop
-        uint32_t frame = 0;
-        while (true) {
-                glfwPollEvents();
-
-		// Event handling
-                if (glfwWindowShouldClose(app.window.handle))
-                        break;
-
+	auto render = [&](const vk::CommandBuffer &cmd, uint32_t index) {
 		// Zoom in/out
 		if (glfwGetKey(app.window.handle, GLFW_KEY_EQUAL) == GLFW_PRESS) {
 			radius += 0.01f;
@@ -285,25 +271,12 @@ int main(int argc, char *argv[])
 			current_time += glfwGetTime() - previous_time;
 		previous_time = glfwGetTime();
 
-		// Rendering
-		littlevk::SurfaceOperation op;
-                op = littlevk::acquire_image(app.device, app.swapchain.swapchain, sync[frame]);
-		if (op.status == littlevk::SurfaceOperation::eResize) {
-			resize();
-			continue;
-		}
-
-		// Record command buffer
-		vk::CommandBuffer &cmd = command_buffers[frame];
-
-		cmd.begin(vk::CommandBufferBeginInfo());
-
 		// Set viewport and scissor
 		littlevk::viewport_and_scissor(cmd, littlevk::RenderArea(app.window));
 
 		littlevk::RenderPassBeginInfo(2)
 			.with_render_pass(render_pass)
-			.with_framebuffer(framebuffers[op.index])
+			.with_framebuffer(framebuffers[index])
 			.with_extent(app.window.extent)
 			.clear_color(0, std::array <float, 4> { 0, 0, 0, 0 })
 			.clear_depth(1, 1)
@@ -337,28 +310,17 @@ int main(int argc, char *argv[])
 		cmd.drawIndexed(mesh.indices.size(), 1, 0, 0, 0);
 
 		cmd.endRenderPass();
-		cmd.end();
+        };
 
-		// Submit command buffer while signaling the semaphore
-		vk::PipelineStageFlags wait_stage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-
-		vk::SubmitInfo submit_info {
-			sync.image_available[frame],
-			wait_stage, cmd,
-			sync.render_finished[frame]
-		};
-
-		app.graphics_queue.submit(submit_info, sync.in_flight[frame]);
-
-                op = littlevk::present_image(app.present_queue, app.swapchain.swapchain, sync[frame], op.index);
-		if (op.status == littlevk::SurfaceOperation::eResize)
-			resize();
-
-		frame = 1 - frame;
-        }
-
-	// Finish all pending operations
-	app.device.waitIdle();
+	littlevk::swapchain_render_loop(app.device,
+		app.graphics_queue,
+		app.present_queue,
+		command_pool,
+		app.window,
+		app.swapchain,
+		deallocator,
+		render,
+		resize);
 
 	// Free resources using automatic deallocator
 	deallocator.drop();

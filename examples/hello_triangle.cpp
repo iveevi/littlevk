@@ -77,9 +77,6 @@ int main()
 		}
 	).unwrap(deallocator);
 
-	auto command_buffers = app.device.allocateCommandBuffers
-		({ command_pool, vk::CommandBufferLevel::ePrimary, 2 });
-
 	// Allocate triangle vertex buffer
 	littlevk::Buffer vertex_buffer = littlevk::bind(app.device, memory_properties, deallocator)
 		.buffer(triangles, sizeof(triangles), vk::BufferUsageFlagBits::eVertexBuffer);
@@ -96,9 +93,6 @@ int main()
 		.with_vertex_layout(vertex_layout)
 		.with_shader_bundle(bundle);
 
-	// Syncronization primitives
-	auto sync = littlevk::present_syncronization(app.device, 2).unwrap(deallocator);
-
 	auto resize = [&]() {
 		app.resize();
 
@@ -110,31 +104,13 @@ int main()
 		framebuffers = generator.unpack();
 	};
 
-	// TODO: text render framerate
-	// Render loop
-        uint32_t frame = 0;
-        while (true) {
-                glfwPollEvents();
-                if (glfwWindowShouldClose(app.window.handle))
-                        break;
-
-		littlevk::SurfaceOperation op;
-                op = littlevk::acquire_image(app.device, app.swapchain.swapchain, sync[frame]);
-		if (op.status == littlevk::SurfaceOperation::eResize) {
-			resize();
-			continue;
-		}
-
-		// Start the render pass
-		const auto &cmd = command_buffers[frame];
-		cmd.begin(vk::CommandBufferBeginInfo {});
-
+	auto render = [&](const vk::CommandBuffer &cmd, uint32_t index) {
 		// Set viewport and scissor
 		littlevk::viewport_and_scissor(cmd, littlevk::RenderArea(app.window));
 
 		littlevk::RenderPassBeginInfo(1)
 			.with_render_pass(render_pass)
-			.with_framebuffer(framebuffers[op.index])
+			.with_framebuffer(framebuffers[index])
 			.with_extent(app.window.extent)
 			.clear_color(0, std::array <float, 4> { 0, 0, 0, 0 })
 			.begin(cmd);
@@ -145,28 +121,17 @@ int main()
 		cmd.draw(3, 1, 0, 0);
 
 		cmd.endRenderPass();
-		cmd.end();
+	};
 
-		// Submit command buffer while signaling the semaphore
-		constexpr vk::PipelineStageFlags wait_stage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-
-		vk::SubmitInfo submit_info {
-			sync.image_available[frame],
-			wait_stage, cmd,
-			sync.render_finished[frame]
-		};
-
-		app.graphics_queue.submit(submit_info, sync.in_flight[frame]);
-
-                op = littlevk::present_image(app.present_queue, app.swapchain.swapchain, sync[frame], op.index);
-		if (op.status == littlevk::SurfaceOperation::eResize)
-			resize();
-
-		frame = 1 - frame;
-        }
-
-	// Finish all pending operations
-	app.device.waitIdle();
+	littlevk::swapchain_render_loop(app.device,
+		app.graphics_queue,
+		app.present_queue,
+		command_pool,
+		app.window,
+		app.swapchain,
+		deallocator,
+		render,
+		resize);
 
 	// Free resources using automatic deallocator
 	deallocator.drop();
