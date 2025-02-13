@@ -1656,9 +1656,20 @@ struct Buffer {
 	vk::DeviceMemory memory;
 	vk::MemoryRequirements requirements = {};
 
-	vk::Buffer operator*() const { return buffer; }
+	vk::Buffer operator*() const {
+		return buffer;
+	}
 
-	vk::DeviceSize device_size() const { return requirements.size; }
+	vk::DeviceSize device_size() const {
+		return requirements.size;
+	}
+
+	vk::DescriptorBufferInfo descriptor() const {
+		return vk::DescriptorBufferInfo()
+			.setBuffer(buffer)
+			.setRange(requirements.size)
+			.setOffset(0);
+	}
 };
 
 // Return proxy for buffers
@@ -2798,8 +2809,8 @@ struct LinkedDescriptorUpdater {
 	LinkedDescriptorUpdater &queue_update(uint32_t binding,
 			                      uint32_t element,
 					      const vk::Buffer &buffer,
-					      uint32_t offset,
-					      uint32_t range) {
+					      uint64_t offset,
+					      uint64_t range) {
 		buffer_infos.emplace_back(buffer, offset, range);
 		buffer_indices.push_back(writes.size());
 		writes.emplace_back(dset, binding, element,
