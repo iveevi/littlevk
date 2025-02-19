@@ -111,35 +111,6 @@ inline void assertion(bool cond, const char *header, const char *format, ...)
 
 } // namespace microlog
 
-// Loading Vulkan extensions
-struct Extensions {
-	// TODO: template to make easier?
-	static auto &vkCreateDebugUtilsMessengerEXT() {
-		static PFN_vkCreateDebugUtilsMessengerEXT handle = 0;
-		return handle;
-	}
-
-	static auto &vkDestroyDebugUtilsMessengerEXT() {
-		static PFN_vkDestroyDebugUtilsMessengerEXT handle = 0;
-		return handle;
-	}
-
-	static auto &vkCmdDrawMeshTasksEXT() {
-		static PFN_vkCmdDrawMeshTasksEXT handle = 0;
-		return handle;
-	}
-
-	static auto &vkCmdDrawMeshTasksNV() {
-		static PFN_vkCmdDrawMeshTasksNV handle = 0;
-		return handle;
-	}
-
-	static auto &vkGetMemoryFdKHR() {
-		static PFN_vkGetMemoryFdKHR handle = 0;
-		return handle;
-	}
-};
-
 // Standalone utils, imported from other sources
 namespace standalone {
 
@@ -473,68 +444,6 @@ inline const vk::Instance &get_vulkan_instance()
 
 	global_instance.instance = vk::createInstance(instance_info);
 
-	// Post initialization; load extensions
-	if (config().enable_validation_layers) {
-		Extensions::vkCreateDebugUtilsMessengerEXT() =
-			(PFN_vkCreateDebugUtilsMessengerEXT)
-				vkGetInstanceProcAddr(
-					global_instance.instance,
-					"vkCreateDebugUtilsMessengerEXT");
-		microlog::assertion(
-			Extensions::vkCreateDebugUtilsMessengerEXT(),
-			"vkCreateDebugUtilsMessengerEXT",
-			"Null function address\n");
-
-		Extensions::vkDestroyDebugUtilsMessengerEXT() =
-			(PFN_vkDestroyDebugUtilsMessengerEXT)
-				vkGetInstanceProcAddr(
-					global_instance.instance,
-					"vkDestroyDebugUtilsMessengerEXT");
-		microlog::assertion(
-			Extensions::vkDestroyDebugUtilsMessengerEXT(),
-			"vkDestroyDebugUtilsMessengerEXT",
-			"Null function address\n");
-	}
-
-	Extensions::vkCmdDrawMeshTasksEXT() =
-		(PFN_vkCmdDrawMeshTasksEXT) vkGetInstanceProcAddr(
-			global_instance.instance, "vkCmdDrawMeshTasksEXT");
-	microlog::assertion(Extensions::vkCmdDrawMeshTasksEXT(),
-			    "vkCmdDrawMeshTasksEXT", "Null function address\n");
-
-	Extensions::vkCmdDrawMeshTasksNV() =
-		(PFN_vkCmdDrawMeshTasksNV) vkGetInstanceProcAddr(
-			global_instance.instance, "vkCmdDrawMeshTasksNV");
-	microlog::assertion(Extensions::vkCmdDrawMeshTasksNV(),
-			    "vkCmdDrawMeshTasksNV", "Null function address\n");
-
-	Extensions::vkGetMemoryFdKHR() =
-		(PFN_vkGetMemoryFdKHR) vkGetInstanceProcAddr(
-			global_instance.instance, "vkGetMemoryFdKHR");
-	microlog::assertion(Extensions::vkGetMemoryFdKHR(), "vkGetMemoryFdKHR",
-			    "Null function address\n");
-
-	// Ensure these are loaded properly
-	if (config().enable_validation_layers) {
-		microlog::assertion(
-			Extensions::vkCreateDebugUtilsMessengerEXT(),
-			"get_vulkan_instance",
-			"Failed to load extension function: "
-			"vkCreateDebugUtilsMessengerEXT\n");
-		microlog::info("get_vulkan_instance",
-			       "Loaded address %p for "
-			       "vkCreateDebugUtilsMessengerEXT\n",
-			       Extensions::vkCreateDebugUtilsMessengerEXT());
-		microlog::info("get_vulkan_instance",
-			       "Loaded address %p for "
-			       "vkDestroyDebugUtilsMessengerEXT\n",
-			       Extensions::vkDestroyDebugUtilsMessengerEXT());
-	}
-
-	microlog::info("get_vulkan_instance",
-		       "Loaded address %p for vkGetMemoryFdKHR\n",
-		       Extensions::vkGetMemoryFdKHR());
-
 	// Loading the debug messenger
 	if (config().enable_validation_layers) {
 		// Create debug messenger
@@ -556,9 +465,8 @@ inline const vk::Instance &get_vulkan_instance()
 						eValidation,
 				validation::debug_logger};
 
-		global_messenger.messenger =
-			global_instance.instance.createDebugUtilsMessengerEXT(
-				debug_messenger_info);
+		global_messenger.messenger = global_instance.instance
+			.createDebugUtilsMessengerEXT(debug_messenger_info);
 		global_messenger.initialized = true;
 	}
 
@@ -3335,17 +3243,17 @@ struct ShaderStageBundle {
 	// TODO: entry points
 	ShaderStageBundle &source(const std::string &glsl,
 				  vk::ShaderStageFlagBits flags,
-				  const std::string &entry = "main",
+				  const char *entry = "main",
 				  const shader::Includes &includes = {},
 				  const shader::Defines &defines = {}) {
 		vk::ShaderModule module = littlevk::shader::compile(device, glsl, flags, includes, defines).unwrap(dal);
-		stages.push_back({ {}, flags, module, entry.c_str() });
+		stages.push_back({ {}, flags, module, entry });
 		return *this;
 	}
 
 	ShaderStageBundle &file(const std::filesystem::path &path,
 				vk::ShaderStageFlagBits flags,
-				const std::string &entry = "main",
+				const char *entry = "main",
 				const shader::Includes &includes = {},
 				const shader::Defines &defines = {}) {
 		std::filesystem::path parent = path.parent_path();
@@ -3354,7 +3262,7 @@ struct ShaderStageBundle {
 		auto copy_includes = includes;
 		copy_includes.insert(parent.string());
 		vk::ShaderModule module = littlevk::shader::compile(device, glsl, flags, copy_includes, defines).unwrap(dal);
-		stages.push_back({ {}, flags, module, entry.c_str() });
+		stages.push_back({ {}, flags, module, entry });
 		return *this;
 	}
 };
@@ -3368,28 +3276,17 @@ struct Pipeline {
 };
 
 // General purpose pipeline compiler
-enum PipelineType {
+enum class PipelineType {
 	eGraphics,
+	eRayTracing,
 	eCompute,
 };
 
-template <PipelineType T>
-struct PipelineAssembler {};
-
-template <>
-struct PipelineAssembler <eGraphics> {
+template <typename Up>
+struct PipelineAssemblerBase {
 	// Essential
 	const vk::Device &device;
-	const littlevk::Window &window;
 	littlevk::Deallocator &dal;
-
-	// Render pass
-	vk::RenderPass render_pass;
-	uint32_t subpass;
-
-	// Vertex information
-	std::optional <vk::VertexInputBindingDescription> vertex_binding;
-	std::vector <vk::VertexInputAttributeDescription> vertex_attributes;
 
 	// Shader information
 	std::optional <std::reference_wrapper <const ShaderStageBundle>> bundle;
@@ -3398,7 +3295,54 @@ struct PipelineAssembler <eGraphics> {
 	std::vector <vk::DescriptorSetLayoutBinding> dsl_bindings;
 	std::vector <vk::PushConstantRange> push_constants;
 
-	// Extras
+	PipelineAssemblerBase(const vk::Device &device_, littlevk::Deallocator &dal_)
+			: device(device_), dal(dal_)  {}
+
+	Up &with_shader_bundle(const ShaderStageBundle &sb) {
+		bundle = sb;
+		return static_cast <Up &> (*this);
+	}
+	
+	Up &with_dsl_binding(uint32_t binding, vk::DescriptorType type,
+			     uint32_t count, vk::ShaderStageFlagBits stage) {
+		dsl_bindings.emplace_back(binding, type, count, stage);
+		return static_cast <Up &> (*this);
+	}
+
+	template <size_t N>
+	Up &with_dsl_bindings(const std::array<vk::DescriptorSetLayoutBinding, N> &bindings) {
+		for (const auto &binding : bindings)
+			dsl_bindings.push_back(binding);
+		return static_cast <Up &> (*this);
+	}
+	
+	Up &with_dsl_bindings(const std::vector <vk::DescriptorSetLayoutBinding> &bindings) {
+		for (const auto &binding : bindings)
+			dsl_bindings.push_back(binding);
+		return static_cast <Up &> (*this);
+	}
+	
+	template <typename T>
+	Up &with_push_constant(vk::ShaderStageFlags stage, uint32_t offset = 0) {
+		push_constants.push_back({ stage, offset, sizeof(T) });
+		return static_cast <Up &> (*this);
+	}
+};
+
+template <PipelineType T>
+struct PipelineAssembler {};
+
+template <>
+struct PipelineAssembler <PipelineType::eGraphics> : PipelineAssemblerBase <PipelineAssembler <PipelineType::eGraphics>> {
+	using base = PipelineAssemblerBase <PipelineAssembler <PipelineType::eGraphics>>;
+
+	const littlevk::Window &window;
+
+	vk::RenderPass render_pass;
+	uint32_t subpass;
+
+	std::optional <vk::VertexInputBindingDescription> vertex_binding;
+	std::vector <vk::VertexInputAttributeDescription> vertex_attributes;
 	vk::PolygonMode fill;
 	vk::CullModeFlags culling;
 
@@ -3409,18 +3353,16 @@ struct PipelineAssembler <eGraphics> {
 	PipelineAssembler(const vk::Device &device_,
 			  const littlevk::Window &window_,
 			  littlevk::Deallocator &dal_)
-		: device(device_),
-		window(window_),
-		dal(dal_),
-		subpass(0),
-		fill(vk::PolygonMode::eFill),
-		culling(vk::CullModeFlagBits::eBack),
-		depth_test(true),
-		depth_write(true),
-		alpha_blend(true) {}
+			  : base(device_, dal_),
+			  window(window_),
+			  subpass(0),
+			  fill(vk::PolygonMode::eFill),
+			  culling(vk::CullModeFlagBits::eBack),
+			  depth_test(true),
+			  depth_write(true),
+			  alpha_blend(true) {}
 
-	PipelineAssembler &with_render_pass(const vk::RenderPass &render_pass_,
-					    uint32_t subpass_) {
+	PipelineAssembler &with_render_pass(const vk::RenderPass &render_pass_, uint32_t subpass_) {
 		render_pass = render_pass_;
 		subpass = subpass_;
 		return *this;
@@ -3445,11 +3387,6 @@ struct PipelineAssembler <eGraphics> {
 		return *this;
 	}
 
-	PipelineAssembler &with_shader_bundle(const ShaderStageBundle &sb) {
-		bundle = sb;
-		return *this;
-	}
-
 	PipelineAssembler &alpha_blending(bool blend) {
 		alpha_blend = blend;
 		return *this;
@@ -3468,33 +3405,6 @@ struct PipelineAssembler <eGraphics> {
 	PipelineAssembler &depth_stencil(bool test, bool write) {
 		depth_test = test;
 		depth_write = write;
-		return *this;
-	}
-
-	PipelineAssembler &with_dsl_binding(uint32_t binding,
-					    vk::DescriptorType type,
-					    uint32_t count,
-					    vk::ShaderStageFlagBits stage) {
-		dsl_bindings.emplace_back(binding, type, count, stage);
-		return *this;
-	}
-
-	template <size_t N>
-	PipelineAssembler &with_dsl_bindings(const std::array <vk::DescriptorSetLayoutBinding, N> &bindings) {
-		for (const auto &binding : bindings)
-			dsl_bindings.push_back(binding);
-		return *this;
-	}
-	
-	PipelineAssembler &with_dsl_bindings(const std::vector <vk::DescriptorSetLayoutBinding> &bindings) {
-		for (const auto &binding : bindings)
-			dsl_bindings.push_back(binding);
-		return *this;
-	}
-
-	template <typename T>
-	PipelineAssembler &with_push_constant(vk::ShaderStageFlags stage, uint32_t offset = 0) {
-		push_constants.push_back({ stage, offset, sizeof(T) });
 		return *this;
 	}
 
@@ -3542,57 +3452,22 @@ struct PipelineAssembler <eGraphics> {
 		return pipeline;
 	}
 
-	operator Pipeline() const { return compile(); }
+	operator Pipeline() const {
+		return compile();
+	}
 };
 
 template <>
-struct PipelineAssembler <eCompute> {
-	// Essential
-	const vk::Device &device;
-	littlevk::Deallocator &dal;
+struct PipelineAssembler <PipelineType::eCompute> : PipelineAssemblerBase <PipelineAssembler <PipelineType::eCompute>> {
+	using base = PipelineAssemblerBase <PipelineAssembler <PipelineType::eCompute>>;
 
-	// Shader information
-	std::optional <std::reference_wrapper <const ShaderStageBundle>> bundle;
-
-	// Pipeline layout information
-	std::vector <vk::DescriptorSetLayoutBinding> dsl_bindings;
-	std::vector <vk::PushConstantRange> push_constants;
-
-	PipelineAssembler(const vk::Device &device_,
-			  littlevk::Deallocator &dal_)
-		: device(device_), dal(dal_)  {}
-
-	PipelineAssembler &with_shader_bundle(const ShaderStageBundle &sb) {
-		bundle = sb;
-		return *this;
-	}
-
-	PipelineAssembler &with_dsl_binding(uint32_t binding,
-					    vk::DescriptorType type,
-					    uint32_t count,
-					    vk::ShaderStageFlagBits stage) {
-		dsl_bindings.emplace_back(binding, type, count, stage);
-		return *this;
-	}
-
-	template <size_t N>
-	PipelineAssembler &with_dsl_bindings(const std::array<vk::DescriptorSetLayoutBinding, N> &bindings) {
-		for (const auto &binding : bindings)
-			dsl_bindings.push_back(binding);
-		return *this;
-	}
-
-	template <typename T>
-	PipelineAssembler &with_push_constant(vk::ShaderStageFlagBits stage) {
-		push_constants.push_back(
-			vk::PushConstantRange {stage, 0, sizeof(T)});
-		return *this;
-	}
-
+	PipelineAssembler(const vk::Device &device_, littlevk::Deallocator &dal_)
+			  : base(device_, dal_) {}
+	
 	Pipeline compile() const {
 		Pipeline pipeline;
 
-		std::vector<vk::DescriptorSetLayout> dsls;
+		std::vector <vk::DescriptorSetLayout> dsls;
 		if (dsl_bindings.size()) {
 			vk::DescriptorSetLayout dsl = descriptor_set_layout(device,
 				vk::DescriptorSetLayoutCreateInfo {
@@ -3664,67 +3539,175 @@ struct littlevk::type_translator <glm::vec4, true> {
 #endif
 
 // Extension wrappers
-inline VKAPI_ATTR VkResult VKAPI_CALL
-vkCreateDebugUtilsMessengerEXT(VkInstance instance,
-		               const VkDebugUtilsMessengerCreateInfoEXT *create_info,
-			       const VkAllocationCallbacks *allocator,
-			       VkDebugUtilsMessengerEXT *debug_messenger)
-{
-	microlog::assertion(Extensions::vkCreateDebugUtilsMessengerEXT(),
-			"vkCreateDebugUtilsMessengerEXT",
-			"Null function address\n");
+#define PFN_SETUP(name, ...)										\
+	using PFN = PFN_##name;										\
+	static PFN handle = 0;										\
+	if (!handle) {											\
+		handle = (PFN) vkGetInstanceProcAddr(littlevk::detail::get_vulkan_instance(), #name);	\
+		microlog::assertion(handle, #name, "invalid PFN: %p", (void *) handle);			\
+	}												\
+	return handle(__VA_ARGS__)
 
-	return Extensions::vkCreateDebugUtilsMessengerEXT()
-		(instance, create_info, allocator, debug_messenger);
+VKAPI_ATTR
+VKAPI_CALL
+inline VkResult vkCreateDebugUtilsMessengerEXT(VkInstance instance,
+					       const VkDebugUtilsMessengerCreateInfoEXT *pCreateInfo,
+					       const VkAllocationCallbacks *pAllocator,
+					       VkDebugUtilsMessengerEXT *pMessenger)
+{
+	PFN_SETUP(vkCreateDebugUtilsMessengerEXT,
+		instance,
+		pCreateInfo,
+		pAllocator,
+		pMessenger);
 }
 
-inline VKAPI_ATTR void VKAPI_CALL
-vkDestroyDebugUtilsMessengerEXT(VkInstance instance,
-		                VkDebugUtilsMessengerEXT debug_messenger,
-				const VkAllocationCallbacks *allocator)
+VKAPI_ATTR
+VKAPI_CALL
+inline void vkDestroyDebugUtilsMessengerEXT(VkInstance instance,
+					    VkDebugUtilsMessengerEXT messenger,
+					    const VkAllocationCallbacks *pAllocator)
 {
-	microlog::assertion(Extensions::vkDestroyDebugUtilsMessengerEXT(),
-			"vkDestroyDebugUtilsMessengerEXT",
-			"Null function address\n");
-
-	return Extensions::vkDestroyDebugUtilsMessengerEXT()
-		(instance, debug_messenger, allocator);
+	PFN_SETUP(vkDestroyDebugUtilsMessengerEXT,
+		instance,
+		messenger,
+		pAllocator);
 }
 
-inline VKAPI_ATTR void VKAPI_CALL
-vkCmdDrawMeshTasksEXT(VkCommandBuffer commandBuffer,
-		      uint32_t groupCountX,
-		      uint32_t groupCountY,
-		      uint32_t groupCountZ)
+VKAPI_ATTR
+VKAPI_CALL
+inline void vkGetAccelerationStructureBuildSizesKHR(VkDevice device,
+						    VkAccelerationStructureBuildTypeKHR buildType,
+						    const VkAccelerationStructureBuildGeometryInfoKHR* pBuildInfo,
+						    const uint32_t* pMaxPrimitiveCounts,
+						    VkAccelerationStructureBuildSizesInfoKHR* pSizeInfo)
 {
-	microlog::assertion(Extensions::vkCmdDrawMeshTasksEXT(),
-			"vkCmdDrawMeshTasksEXT",
-			"Null function address\n");
-
-	return Extensions::vkCmdDrawMeshTasksEXT()
-		(commandBuffer, groupCountX, groupCountY, groupCountZ);
+	PFN_SETUP(vkGetAccelerationStructureBuildSizesKHR,
+		device,
+		buildType,
+		pBuildInfo,
+		pMaxPrimitiveCounts,
+		pSizeInfo);
 }
 
-inline VKAPI_ATTR void VKAPI_CALL
-vkCmdDrawMeshTasksNV(VkCommandBuffer commandBuffer,
-		     uint32_t taskCount,
-		     uint32_t firstTask)
+VKAPI_ATTR
+VKAPI_CALL
+inline VkResult vkCreateAccelerationStructureKHR(VkDevice device,
+						 const VkAccelerationStructureCreateInfoKHR *pCreateInfo,
+						 const VkAllocationCallbacks *pAllocator,
+						 VkAccelerationStructureKHR *pAccelerationStructure)
 {
-	microlog::assertion(Extensions::vkCmdDrawMeshTasksNV(),
-			"vkCmdDrawMeshTasksNV",
-			"Null function address\n");
-
-	return Extensions::vkCmdDrawMeshTasksNV()
-		(commandBuffer, taskCount, firstTask);
+	PFN_SETUP(vkCreateAccelerationStructureKHR,
+		device,
+		pCreateInfo,
+		pAllocator,
+		pAccelerationStructure);
 }
 
-inline VKAPI_ATTR VkResult VKAPI_CALL
-vkGetMemoryFdKHR(VkDevice device, const VkMemoryGetFdInfoKHR *info, int *fd)
+VKAPI_ATTR
+VKAPI_CALL
+inline void vkCmdBuildAccelerationStructuresKHR(VkCommandBuffer commandBuffer,
+						uint32_t infoCount,
+						const VkAccelerationStructureBuildGeometryInfoKHR *pInfos,
+						const VkAccelerationStructureBuildRangeInfoKHR *const *ppBuildRangeInfos)
 {
-	microlog::assertion(Extensions::vkGetMemoryFdKHR(),
-			"vkGetMemoryFdKHR",
-			"Null function address\n");
+	PFN_SETUP(vkCmdBuildAccelerationStructuresKHR,
+		commandBuffer,
+		infoCount,
+		pInfos,
+		ppBuildRangeInfos);
+}
 
-	return Extensions::vkGetMemoryFdKHR()
-		(device, info, fd);
+VKAPI_ATTR
+VKAPI_CALL
+inline VkDeviceAddress vkGetAccelerationStructureDeviceAddressKHR(VkDevice device,
+								  const VkAccelerationStructureDeviceAddressInfoKHR *pInfo)
+{
+	PFN_SETUP(vkGetAccelerationStructureDeviceAddressKHR,
+		device,
+		pInfo);
+}
+
+VKAPI_ATTR
+VKAPI_CALL
+inline VkResult vkGetRayTracingShaderGroupHandlesKHR(VkDevice device,
+						     VkPipeline pipeline,
+						     uint32_t firstGroup,
+						     uint32_t groupCount,
+						     size_t dataSize,
+						     void *pData)
+{
+	PFN_SETUP(vkGetRayTracingShaderGroupHandlesKHR,
+		device,
+		pipeline,
+		firstGroup,
+		groupCount,
+		dataSize,
+		pData);
+}
+
+VKAPI_ATTR
+VKAPI_CALL
+inline VkResult vkCreateRayTracingPipelinesKHR(VkDevice device,
+					       VkDeferredOperationKHR deferredOperation,
+					       VkPipelineCache pipelineCache,
+					       uint32_t createInfoCount,
+					       const VkRayTracingPipelineCreateInfoKHR *pCreateInfos,
+					       const VkAllocationCallbacks *pAllocator,
+					       VkPipeline *pPipelines)
+{
+	PFN_SETUP(vkCreateRayTracingPipelinesKHR,
+		device,
+		deferredOperation,
+		pipelineCache,
+		createInfoCount,
+		pCreateInfos,
+		pAllocator,
+		pPipelines);
+}
+
+VKAPI_ATTR
+VKAPI_CALL
+inline void vkCmdTraceRaysKHR(VkCommandBuffer commandBuffer,
+			      const VkStridedDeviceAddressRegionKHR *pRaygenShaderBindingTable,
+			      const VkStridedDeviceAddressRegionKHR *pMissShaderBindingTable,
+			      const VkStridedDeviceAddressRegionKHR *pHitShaderBindingTable,
+			      const VkStridedDeviceAddressRegionKHR *pCallableShaderBindingTable,
+			      uint32_t width,
+			      uint32_t height,
+			      uint32_t depth)
+{
+	PFN_SETUP(vkCmdTraceRaysKHR,
+		commandBuffer,
+		pRaygenShaderBindingTable,
+		pMissShaderBindingTable,
+		pHitShaderBindingTable,
+		pCallableShaderBindingTable,
+		width,
+		height,
+		depth);
+}
+
+VKAPI_ATTR
+VKAPI_CALL
+inline VkResult vkSetDebugUtilsObjectNameEXT(VkDevice device,
+					     const VkDebugUtilsObjectNameInfoEXT *pNameInfo)
+{
+	PFN_SETUP(vkSetDebugUtilsObjectNameEXT,
+		device,
+		pNameInfo);
+}
+
+VKAPI_ATTR
+VKAPI_CALL
+inline void vkCmdDrawMeshTasksEXT(VkCommandBuffer commandBuffer,
+				  uint32_t groupCountX,
+				  uint32_t groupCountY,
+				  uint32_t groupCountZ)
+{
+	PFN_SETUP(vkCmdDrawMeshTasksEXT,
+		commandBuffer,
+		groupCountX,
+		groupCountY,
+		groupCountZ);
 }
