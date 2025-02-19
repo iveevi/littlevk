@@ -401,10 +401,13 @@ static struct debug_messenger_singleton {
 // Get (or create) the singleton instance
 inline const vk::Instance &get_vulkan_instance()
 {
-	// TODO: from config...
 	static vk::ApplicationInfo app_info {
-		"LittleVk", VK_MAKE_VERSION(1, 0, 0), "LittelVk",
-		VK_MAKE_VERSION(1, 0, 0), VK_API_VERSION_1_3};
+		"littlevk",
+		VK_MAKE_VERSION(1, 0, 0),
+		"littlevk",
+		VK_MAKE_VERSION(1, 0, 0),
+		VK_API_VERSION_1_4
+	};
 
 	// Skip if already initialized
 	if (global_instance.initialized)
@@ -413,8 +416,9 @@ inline const vk::Instance &get_vulkan_instance()
 	// Make sure GLFW is initialized
 	initialize_glfw();
 
-	static const std::vector<const char *> validation_layers = {
-		"VK_LAYER_KHRONOS_validation"};
+	static const std::vector <const char *> validation_layers = {
+		"VK_LAYER_KHRONOS_validation"
+	};
 
 	static vk::InstanceCreateInfo instance_info {
 		vk::InstanceCreateFlags(),
@@ -422,7 +426,8 @@ inline const vk::Instance &get_vulkan_instance()
 		0,
 		nullptr,
 		(uint32_t) get_required_extensions().size(),
-		get_required_extensions().data()};
+		get_required_extensions().data()
+	};
 
 	if (config().enable_validation_layers) {
 		// Check if validation layers are available
@@ -435,14 +440,26 @@ inline const vk::Instance &get_vulkan_instance()
 		}
 
 		if (config().enable_validation_layers) {
-			instance_info.enabledLayerCount =
-				(uint32_t) validation_layers.size();
-			instance_info.ppEnabledLayerNames =
-				validation_layers.data();
+			instance_info.enabledLayerCount = (uint32_t) validation_layers.size();
+			instance_info.ppEnabledLayerNames = validation_layers.data();
 		}
 	}
 
+	static std::vector <vk::ValidationFeatureEnableEXT> validation_features {
+		// vk::ValidationFeatureEnableEXT::eDebugPrintf,
+		vk::ValidationFeatureEnableEXT::eGpuAssisted,
+		// vk::ValidationFeatureEnableEXT::eSynchronizationValidation,
+	};
+
+	static vk::ValidationFeaturesEXT features;
+
+	if (config().enable_validation_layers) {
+		features.setEnabledValidationFeatures(validation_features);
+		instance_info.setPNext(&features);
+	}
+
 	global_instance.instance = vk::createInstance(instance_info);
+	global_instance.initialized = true;
 
 	// Loading the debug messenger
 	if (config().enable_validation_layers) {
@@ -450,27 +467,20 @@ inline const vk::Instance &get_vulkan_instance()
 		static constexpr vk::DebugUtilsMessengerCreateInfoEXT
 			debug_messenger_info {
 				vk::DebugUtilsMessengerCreateFlagsEXT(),
-				vk::DebugUtilsMessageSeverityFlagBitsEXT::
-						eError |
-					vk::DebugUtilsMessageSeverityFlagBitsEXT::
-						eWarning |
-					vk::DebugUtilsMessageSeverityFlagBitsEXT::
-						eVerbose |
-					vk::DebugUtilsMessageSeverityFlagBitsEXT::
-						eInfo,
-				vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
-					vk::DebugUtilsMessageTypeFlagBitsEXT::
-						ePerformance |
-					vk::DebugUtilsMessageTypeFlagBitsEXT::
-						eValidation,
-				validation::debug_logger};
+				vk::DebugUtilsMessageSeverityFlagBitsEXT::eError
+				| vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning
+				| vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose
+				| vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo,
+				vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral
+				| vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance
+				| vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation,
+				validation::debug_logger
+			};
 
 		global_messenger.messenger = global_instance.instance
 			.createDebugUtilsMessengerEXT(debug_messenger_info);
 		global_messenger.initialized = true;
 	}
-
-	global_instance.initialized = true;
 
 	return global_instance.instance;
 }
@@ -1624,13 +1634,15 @@ buffer(const vk::Device &device,
 	Buffer buffer;
 
 	vk::BufferCreateInfo buffer_info {
-		{}, size, flags, vk::SharingMode::eExclusive, 0, nullptr};
+		{}, size, flags,
+		vk::SharingMode::eExclusive,
+		0, nullptr
+	};
 
 	// Exporting the buffer data for other APIs (e.g. CUDA)
 	vk::ExternalMemoryBufferCreateInfo external_info {};
 	if (external) {
-		external_info.handleTypes =
-			vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd;
+		external_info.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd;
 		buffer_info.pNext = &external_info;
 	}
 
@@ -1638,19 +1650,25 @@ buffer(const vk::Device &device,
 	buffer.buffer = device.createBuffer(buffer_info);
 	buffer.requirements = device.getBufferMemoryRequirements(buffer.buffer);
 
-	vk::MemoryAllocateInfo buffer_alloc_info {
-		buffer.requirements.size,
-		find_memory_type(
-			properties, buffer.requirements.memoryTypeBits,
-			vk::MemoryPropertyFlagBits::eHostVisible |
-				vk::MemoryPropertyFlagBits::eHostCoherent)};
+	auto alloc_flags = vk::MemoryAllocateFlagsInfo()
+		.setFlags(vk::MemoryAllocateFlagBits::eDeviceAddress);
+
+	auto buffer_alloc_info = vk::MemoryAllocateInfo()
+		.setAllocationSize(buffer.requirements.size)
+		.setMemoryTypeIndex(find_memory_type(properties,
+			buffer.requirements.memoryTypeBits,
+			vk::MemoryPropertyFlagBits::eHostVisible
+			| vk::MemoryPropertyFlagBits::eHostCoherent));
+
+	auto fi = vk::BufferUsageFlagBits::eShaderDeviceAddress;
+	if ((flags & fi) == fi)
+		buffer_alloc_info.setPNext(&alloc_flags);
 
 	// Export the buffer data for other APIs (e.g. CUDA)
 	// TODO: general function
 	vk::ExportMemoryAllocateInfo export_info {};
 	if (external) {
-		export_info.handleTypes =
-			vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd;
+		export_info.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd;
 		buffer_alloc_info.pNext = &export_info;
 	}
 
@@ -1710,7 +1728,8 @@ buffer(const vk::Device &device,
 }
 
 // TODO: overload with size
-inline void upload(const vk::Device &device, const Buffer &buffer,
+inline void upload(const vk::Device &device,
+		   const Buffer &buffer,
 		   const void *data)
 {
 	void *mapped = device.mapMemory(buffer.memory, 0, buffer.requirements.size);
@@ -3242,7 +3261,7 @@ struct ShaderStageBundle {
 
 	// TODO: entry points
 	ShaderStageBundle &source(const std::string &glsl,
-				  vk::ShaderStageFlagBits flags,
+				  const vk::ShaderStageFlagBits &flags,
 				  const char *entry = "main",
 				  const shader::Includes &includes = {},
 				  const shader::Defines &defines = {}) {
@@ -3252,7 +3271,7 @@ struct ShaderStageBundle {
 	}
 
 	ShaderStageBundle &file(const std::filesystem::path &path,
-				vk::ShaderStageFlagBits flags,
+				const vk::ShaderStageFlagBits &flags,
 				const char *entry = "main",
 				const shader::Includes &includes = {},
 				const shader::Defines &defines = {}) {
