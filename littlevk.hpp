@@ -3259,13 +3259,12 @@ struct ShaderStageBundle {
 	ShaderStageBundle(const vk::Device &device, littlevk::Deallocator &dal)
 		: device(device), dal(dal) {}
 
-	// TODO: entry points
 	ShaderStageBundle &source(const std::string &glsl,
 				  const vk::ShaderStageFlagBits &flags,
 				  const char *entry = "main",
 				  const shader::Includes &includes = {},
 				  const shader::Defines &defines = {}) {
-		vk::ShaderModule module = littlevk::shader::compile(device, glsl, flags, includes, defines).unwrap(dal);
+		auto module = littlevk::shader::compile(device, glsl, flags, includes, defines).unwrap(dal);
 		stages.push_back({ {}, flags, module, entry });
 		return *this;
 	}
@@ -3280,7 +3279,16 @@ struct ShaderStageBundle {
 
 		auto copy_includes = includes;
 		copy_includes.insert(parent.string());
-		vk::ShaderModule module = littlevk::shader::compile(device, glsl, flags, copy_includes, defines).unwrap(dal);
+		auto module = littlevk::shader::compile(device, glsl, flags, copy_includes, defines).unwrap(dal);
+		stages.push_back({ {}, flags, module, entry });
+		return *this;
+	}
+
+	ShaderStageBundle &code(const std::vector <uint32_t> &spirv,
+				const vk::ShaderStageFlagBits &flags,
+				const char *entry = "main") {
+		auto info = vk::ShaderModuleCreateInfo().setCode(spirv);
+		auto module = device.createShaderModule(info);
 		stages.push_back({ {}, flags, module, entry });
 		return *this;
 	}
