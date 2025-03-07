@@ -275,16 +275,14 @@ struct ComposedReturnProxy {
 namespace validation {
 
 // Create debug messenger
-static bool check_validation_layer_support(
-	const std::vector<const char *> &validation_layers)
+static bool check_validation_layer_support(const std::vector <const char *> &validation_layers)
 {
 	uint32_t layer_count;
 	vkEnumerateInstanceLayerProperties(&layer_count, nullptr);
 
 	std::vector<VkLayerProperties> available_layers(layer_count);
 
-	vkEnumerateInstanceLayerProperties(&layer_count,
-					   available_layers.data());
+	vkEnumerateInstanceLayerProperties(&layer_count, available_layers.data());
 	for (const char *layer : validation_layers) {
 		bool layerFound = false;
 
@@ -302,25 +300,20 @@ static bool check_validation_layer_support(
 	return true;
 }
 
-static VKAPI_ATTR VkBool32 VKAPI_CALL
-debug_logger(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-	     VkDebugUtilsMessageTypeFlagsEXT messageType,
-	     const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
-	     void *pUserData)
+static VKAPI_ATTR VkBool32 VKAPI_CALL debug_logger(vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
+						   vk::DebugUtilsMessageTypeFlagsEXT type,
+						   const vk::DebugUtilsMessengerCallbackDataEXT *data,
+						   void *user)
 {
 	// Errors
-	if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-		microlog::error("validation", "%s\n", pCallbackData->pMessage);
+	if (severity >= vk::DebugUtilsMessageSeverityFlagBitsEXT::eError) {
+		microlog::error("validation", "%s\n", data->pMessage);
 		if (config().abort_on_validation_error)
 			__builtin_trap();
-	}
-	else if (messageSeverity >=
-		 VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-		microlog::warning("validation", "%s\n",
-				  pCallbackData->pMessage);
-	}
-	else if (config().enable_logging) {
-		microlog::info("validation", "%s\n", pCallbackData->pMessage);
+	} else if (severity >= vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning) {
+		microlog::warning("validation", "%s\n", data->pMessage);
+	} else if (config().enable_logging) {
+		microlog::info("validation", "%s\n", data->pMessage);
 	}
 
 	return VK_FALSE;
