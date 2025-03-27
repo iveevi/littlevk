@@ -34,7 +34,8 @@ namespace detail {
 
 // Configuration parameters (free to user modification)
 struct Config {
-	std::vector<const char *> instance_extensions {};
+	std::vector <const char *> instance_extensions {};
+	std::vector <vk::ValidationFeatureEnableEXT> validation_features {};
 	bool enable_validation_layers = true;
 	bool abort_on_validation_error = true;
 	bool enable_logging = true;
@@ -371,24 +372,8 @@ static struct {
 
 // Debug messenger singleton
 static struct debug_messenger_singleton {
-	bool initialized = false;
 	vk::DebugUtilsMessengerEXT messenger;
-
-	~debug_messenger_singleton()
-	{
-		if (initialized) {
-			if (!global_instance.initialized) {
-				microlog::error(
-					"fatal",
-					"debug messenger singleton destroyed "
-					"without valid instance singleton\n");
-				return;
-			}
-
-			global_instance.instance.destroyDebugUtilsMessengerEXT(
-				messenger);
-		}
-	}
+	bool initialized = false;
 } global_messenger;
 
 // Get (or create) the singleton instance
@@ -438,16 +423,10 @@ inline const vk::Instance &get_vulkan_instance()
 		}
 	}
 
-	static std::vector <vk::ValidationFeatureEnableEXT> validation_features {
-		// vk::ValidationFeatureEnableEXT::eDebugPrintf,
-		vk::ValidationFeatureEnableEXT::eGpuAssisted,
-		// vk::ValidationFeatureEnableEXT::eSynchronizationValidation,
-	};
-
 	static vk::ValidationFeaturesEXT features;
 
 	if (config().enable_validation_layers) {
-		features.setEnabledValidationFeatures(validation_features);
+		features.setEnabledValidationFeatures(config().validation_features);
 		instance_info.setPNext(&features);
 	}
 
@@ -483,8 +462,7 @@ inline void shutdown_now()
 {
 	// Kill the messenger, then the instance
 	if (global_messenger.initialized) {
-		global_instance.instance.destroyDebugUtilsMessengerEXT(
-			global_messenger.messenger);
+		global_instance.instance.destroyDebugUtilsMessengerEXT(global_messenger.messenger);
 		global_messenger.initialized = false;
 	}
 
@@ -3281,8 +3259,8 @@ struct ShaderStageBundle {
 				const vk::ShaderStageFlagBits &flags,
 				const char *entry = "main") {
 		auto info = vk::ShaderModuleCreateInfo().setCode(spirv);
-		auto module = device.createShaderModule(info);
-		stages.push_back({ {}, flags, module, entry });
+		shader::ShaderModuleReturnProxy module = device.createShaderModule(info);
+		stages.push_back({ {}, flags, module.unwrap(dal), entry });
 		return *this;
 	}
 };
@@ -3322,7 +3300,7 @@ struct PipelineAssemblerBase {
 		bundle = sb;
 		return static_cast <Up &> (*this);
 	}
-	
+
 	Up &with_dsl_binding(uint32_t binding, vk::DescriptorType type,
 			     uint32_t count, vk::ShaderStageFlagBits stage) {
 		dsl_bindings.emplace_back(binding, type, count, stage);
@@ -3335,13 +3313,13 @@ struct PipelineAssemblerBase {
 			dsl_bindings.push_back(binding);
 		return static_cast <Up &> (*this);
 	}
-	
+
 	Up &with_dsl_bindings(const std::vector <vk::DescriptorSetLayoutBinding> &bindings) {
 		for (const auto &binding : bindings)
 			dsl_bindings.push_back(binding);
 		return static_cast <Up &> (*this);
 	}
-	
+
 	template <typename T>
 	Up &with_push_constant(vk::ShaderStageFlags stage, uint32_t offset = 0) {
 		push_constants.push_back({ stage, offset, sizeof(T) });
@@ -3483,7 +3461,7 @@ struct PipelineAssembler <PipelineType::eCompute> : PipelineAssemblerBase <Pipel
 
 	PipelineAssembler(const vk::Device &device_, littlevk::Deallocator &dal_)
 			  : base(device_, dal_) {}
-	
+
 	Pipeline compile() const {
 		Pipeline pipeline;
 
@@ -3646,6 +3624,18 @@ inline VkDeviceAddress vkGetAccelerationStructureDeviceAddressKHR(VkDevice devic
 	PFN_SETUP(vkGetAccelerationStructureDeviceAddressKHR,
 		device,
 		pInfo);
+}
+
+VKAPI_ATTR
+VKAPI_CALL
+inline void vkDestroyAccelerationStructureKHR(VkDevice device,
+					      VkAccelerationStructureKHR accelerationStructure,
+					      const VkAllocationCallbacks *pAllocator)
+{
+	PFN_SETUP(vkDestroyAccelerationStructureKHR,
+		device,
+		accelerationStructure,
+		pAllocator);
 }
 
 VKAPI_ATTR
