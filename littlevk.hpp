@@ -1701,9 +1701,10 @@ buffer(const vk::Device &device,
 // TODO: overload with size
 inline void upload(const vk::Device &device,
 		   const Buffer &buffer,
-		   const void *data)
+		   const void *data,
+		   size_t offset = 0)
 {
-	void *mapped = device.mapMemory(buffer.memory, 0, buffer.requirements.size);
+	void *mapped = device.mapMemory(buffer.memory, offset, buffer.requirements.size - offset);
 	std::memcpy(mapped, data, buffer.requirements.size);
 	device.unmapMemory(buffer.memory);
 }
@@ -2670,6 +2671,8 @@ struct LinkedDescriptorUpdater {
 	const vk::DescriptorSet &dset;
 	const std::vector <vk::DescriptorSetLayoutBinding> &bindings;
 
+	std::map <size_t, size_t> mapping;
+
 	// Allow for arbitrarily many updates; enable partial/full updates
 	std::vector <vk::DescriptorImageInfo> image_infos;
 	std::vector <vk::DescriptorBufferInfo> buffer_infos;
@@ -2680,7 +2683,11 @@ struct LinkedDescriptorUpdater {
 	LinkedDescriptorUpdater(const vk::Device &device_,
 			        const vk::DescriptorSet &dset_,
 				const std::vector <vk::DescriptorSetLayoutBinding> &bindings_)
-		: device(device_), dset(dset_), bindings(bindings_) {}
+		: device(device_), dset(dset_), bindings(bindings_)
+	{
+		for (size_t i = 0; i < bindings.size(); i++)
+			mapping[bindings[i].binding] = i;
+	}
 
 	~LinkedDescriptorUpdater() {
 		if (writes.empty())
@@ -2696,11 +2703,12 @@ struct LinkedDescriptorUpdater {
 					      const vk::Sampler &sampler,
 					      const vk::ImageView &view,
 					      const vk::ImageLayout &layout) {
+		auto idx = mapping.at(binding);
 		image_infos.emplace_back(sampler, view, layout);
 		image_indices.push_back(writes.size());
 		writes.emplace_back(dset, binding, element,
-				    bindings[binding].descriptorCount,
-				    bindings[binding].descriptorType);
+				    bindings[idx].descriptorCount,
+				    bindings[idx].descriptorType);
 		return *this;
 	}
 
@@ -2709,11 +2717,12 @@ struct LinkedDescriptorUpdater {
 					      const vk::Buffer &buffer,
 					      uint64_t offset,
 					      uint64_t range) {
+		auto idx = mapping.at(binding);
 		buffer_infos.emplace_back(buffer, offset, range);
 		buffer_indices.push_back(writes.size());
 		writes.emplace_back(dset, binding, element,
-				    bindings[binding].descriptorCount,
-				    bindings[binding].descriptorType);
+				    bindings[idx].descriptorCount,
+				    bindings[idx].descriptorType);
 		return *this;
 	}
 
@@ -3348,6 +3357,8 @@ struct PipelineAssembler <PipelineType::eGraphics> : PipelineAssemblerBase <Pipe
 	bool depth_write;
 	bool alpha_blend;
 
+	bool push_descriptor;
+
 	PipelineAssembler(const vk::Device &device_,
 			  const littlevk::Window &window_,
 			  littlevk::Deallocator &dal_)
@@ -3358,7 +3369,8 @@ struct PipelineAssembler <PipelineType::eGraphics> : PipelineAssemblerBase <Pipe
 			  culling(vk::CullModeFlagBits::eBack),
 			  depth_test(true),
 			  depth_write(true),
-			  alpha_blend(true) {}
+			  alpha_blend(true),
+			  push_descriptor(false) {}
 
 	PipelineAssembler &with_render_pass(const vk::RenderPass &render_pass_, uint32_t subpass_) {
 		render_pass = render_pass_;
@@ -3405,16 +3417,24 @@ struct PipelineAssembler <PipelineType::eGraphics> : PipelineAssemblerBase <Pipe
 		depth_write = write;
 		return *this;
 	}
+	
+	PipelineAssembler &set_push_descriptor(bool set) {
+		push_descriptor = set;
+		return *this;
+	}
 
 	Pipeline compile() const {
 		Pipeline pipeline;
 
 		std::vector <vk::DescriptorSetLayout> dsls;
 		if (dsl_bindings.size()) {
-			vk::DescriptorSetLayout dsl = descriptor_set_layout(device,
-				vk::DescriptorSetLayoutCreateInfo {
-					{}, dsl_bindings
-				}).unwrap(dal);
+			auto dsl_info = vk::DescriptorSetLayoutCreateInfo()
+				.setBindings(dsl_bindings);
+			
+			if (push_descriptor)
+				dsl_info.setFlags(vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptor);
+
+			auto dsl = descriptor_set_layout(device, dsl_info).unwrap(dal);
 
 			dsls.push_back(dsl);
 			pipeline.dsl = dsl;
